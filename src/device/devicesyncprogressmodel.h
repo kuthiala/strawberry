@@ -44,8 +44,9 @@ class DeviceSyncProgressModel : public QAbstractListModel {
   enum class Status {
     Pending,    // queued but not yet attempted
     InProgress, // currently being transcoded/copied
+    Retrying,   // last attempt failed; waiting for the next attempt
     Done,       // CopyToStorage + CommitCopy succeeded
-    Failed,     // CopyToStorage or CommitCopy reported an error
+    Failed,     // CopyToStorage or CommitCopy reported an error after all retries
   };
 
   enum Role {
@@ -66,10 +67,21 @@ class DeviceSyncProgressModel : public QAbstractListModel {
   // back to basefilename) becomes one row marked Pending.
   void StartSync(const QString &device_label, const SongList &queue);
 
-  // Called after each song finishes (success or failure) in the same order
-  // as the queue passed to StartSync. song is used purely as a sanity check
-  // against the row title; if it does not match we still advance.
+  // Called after each song finishes (success or final failure -- i.e. all
+  // retries exhausted) in the same order as the queue passed to StartSync.
+  // song is used purely as a sanity check against the row title; if it does
+  // not match we still advance.
   void SongFinished(const Song &song, const bool success);
+
+  // Called when a song failed an individual attempt but is being re-queued
+  // for another try. attempt is 1-based (1 = first failure, 2 = second, ...).
+  // max_attempts is the total cap (e.g. 10). delay_ms is the wall-clock wait
+  // before the next attempt will start. The row is annotated with a
+  // "[retry N/M in Xs]" suffix and its status set to Retrying so the user
+  // can distinguish a paused-for-retry song from a still-pending one. The
+  // next_song_index_ cursor is NOT advanced; the row stays "current" until
+  // it either succeeds (SongFinished true) or finally fails.
+  void SongRetryScheduled(const Song &song, const int attempt, const int max_attempts, const qint64 delay_ms);
 
   // Called when the entire sync ends. Does not clear the rows -- the user
   // typically wants to scroll back and see which songs failed -- but does
@@ -100,10 +112,17 @@ class DeviceSyncProgressModel : public QAbstractListModel {
   struct Row {
     QString title;
     Status status;
+    // Optional retry annotation. Stored on the row so the view can render
+    // it as a suffix and a tooltip without re-querying Organize. attempt
+    // is 0 when no retry is in flight.
+    int retry_attempt = 0;
+    int retry_max = 0;
+    qint64 retry_delay_ms = 0;
   };
 
   QList<Row> rows_;
   QIcon icon_pending_;
+  QIcon icon_retrying_;
   QIcon icon_done_;
   QIcon icon_failed_;
   QString device_label_;
