@@ -1,3 +1,18 @@
+/*
+ * Strawberry stylesheet
+ *
+ * The %palette-* tokens are substituted at runtime by StyleSheetLoader
+ * from the active QPalette. This keeps the look adaptive to the OS theme
+ * (light vs dark, accent color, etc.) -- DO NOT hard-code colors here.
+ *
+ * The block below up to "MODERN THEME" preserves the legacy rules that
+ * other widgets depend on (playlist background image, context layout,
+ * MenuPopupToolButton). The "MODERN THEME" section adds Claude-inspired
+ * visual polish (rounded corners, generous padding, subtle borders) on
+ * top of those rules. Anything in MODERN THEME is purely cosmetic and
+ * can be removed without breaking functionality.
+ */
+
 #playlist {
   background-color: %palette-base;
   alternate-background-color: %palette-alternate-base;
@@ -63,4 +78,314 @@ QToolButton[popupMode="1"][accessibleName="MenuPopupToolButton"], QToolButton:ho
 QToolButton::menu-button[accessibleName="MenuPopupToolButton"] {
   width: 16px;
   border: none;
+}
+
+/* ============================================================
+ * MODERN THEME -- Claude-inspired polish
+ * ------------------------------------------------------------
+ * Goals:
+ *   - Generous breathing room (Claude UI feels uncluttered)
+ *   - Soft rounded corners on containers and controls (6-8 px)
+ *   - Subtle borders instead of hard 3D bevels
+ *   - Accent only on focused / hovered controls
+ *
+ * Constraints:
+ *   - Use ONLY %palette-* tokens for color so dark mode keeps
+ *     working without any extra code path.
+ *   - Do not override any selector that already has functional
+ *     meaning above (e.g. #playlist background image, menu
+ *     popup buttons) -- only extend.
+ *   - Keep selectors specific enough that custom widgets that
+ *     paint themselves (analyzers, OSD, album art widgets) are
+ *     left alone.
+ * ============================================================ */
+
+/* --- Generic inputs ------------------------------------------------ */
+
+QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+  border: 1px solid %palette-mid;
+  border-radius: 6px;
+  padding: 4px 8px;
+  selection-background-color: %palette-highlight;
+  selection-color: %palette-highlightedtext;
+}
+
+QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+  border: 1px solid %palette-highlight;
+}
+
+QLineEdit:disabled, QPlainTextEdit:disabled, QTextEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
+  color: %palette-mid;
+  border: 1px solid %palette-midlight;
+}
+
+QComboBox::drop-down {
+  border: none;
+  width: 18px;
+}
+
+/* --- Push buttons -------------------------------------------------- */
+
+QPushButton {
+  border: 1px solid %palette-mid;
+  border-radius: 6px;
+  padding: 5px 14px;
+  background-color: %palette-button;
+  color: %palette-buttontext;
+}
+
+QPushButton:hover {
+  border: 1px solid %palette-highlight;
+}
+
+QPushButton:pressed {
+  background-color: %palette-highlight-lighter;
+  border: 1px solid %palette-highlight-darker;
+}
+
+QPushButton:default {
+  border: 1px solid %palette-highlight;
+}
+
+QPushButton:disabled {
+  color: %palette-mid;
+  border: 1px solid %palette-midlight;
+}
+
+/* QDialogButtonBox children -- keep some standard sizing room */
+QDialogButtonBox QPushButton {
+  min-width: 72px;
+}
+
+/* --- Tool buttons (toolbar, transport) ----------------------------- */
+/* Note: we intentionally do NOT match QToolButton globally so the
+ * specialised [accessibleName="MenuPopupToolButton"] rule above keeps
+ * its own look. We target only toolbar / tab tool buttons. */
+
+QToolBar QToolButton, QToolButton#qt_toolbar_ext_button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px;
+}
+
+QToolBar QToolButton:hover {
+  background-color: %palette-highlight-lighter;
+  border: 1px solid %palette-highlight;
+}
+
+QToolBar QToolButton:pressed, QToolBar QToolButton:checked {
+  background-color: %palette-highlight-lighter;
+  border: 1px solid %palette-highlight-darker;
+}
+
+/* --- Group boxes --------------------------------------------------- */
+
+QGroupBox {
+  border: 1px solid %palette-mid;
+  border-radius: 8px;
+  margin-top: 12px;
+  padding-top: 8px;
+}
+
+QGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top left;
+  left: 10px;
+  padding: 0 4px;
+  color: %palette-windowtext;
+}
+
+/* --- Tab widget ---------------------------------------------------- */
+
+QTabWidget::pane {
+  border: 1px solid %palette-mid;
+  border-radius: 8px;
+  top: -1px;
+}
+
+QTabBar::tab {
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-top-left-radius: 6px;
+  border-top-right-radius: 6px;
+  margin-right: 2px;
+}
+
+QTabBar::tab:hover {
+  background-color: %palette-highlight-lighter;
+}
+
+QTabBar::tab:selected {
+  background-color: %palette-base;
+  border: 1px solid %palette-mid;
+  border-bottom: none;
+}
+
+/* --- List/Tree/Table views ----------------------------------------- */
+
+QListView, QTreeView, QTableView {
+  border: 1px solid %palette-mid;
+  border-radius: 6px;
+  selection-background-color: %palette-highlight;
+  selection-color: %palette-highlightedtext;
+  outline: none;
+}
+
+QListView::item, QTreeView::item, QTableView::item {
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+
+QListView::item:hover, QTreeView::item:hover, QTableView::item:hover {
+  background-color: %palette-highlight-lighter;
+}
+
+QListView::item:selected, QTreeView::item:selected, QTableView::item:selected {
+  background-color: %palette-highlight;
+  color: %palette-highlightedtext;
+}
+
+QHeaderView::section {
+  background-color: %palette-alternate-base;
+  border: none;
+  border-right: 1px solid %palette-mid;
+  border-bottom: 1px solid %palette-mid;
+  padding: 4px 8px;
+}
+
+/* The playlist view paints its own background image (rules at top of
+ * file); make sure we don't put a rounded border on it that would
+ * clip the bitmap. */
+#playlist {
+  border: none;
+  border-radius: 0;
+}
+
+/* --- Menus --------------------------------------------------------- */
+
+QMenu {
+  border: 1px solid %palette-mid;
+  border-radius: 8px;
+  padding: 4px;
+}
+
+QMenu::item {
+  padding: 5px 22px 5px 28px;
+  border-radius: 4px;
+}
+
+QMenu::item:selected {
+  background-color: %palette-highlight;
+  color: %palette-highlightedtext;
+}
+
+QMenu::separator {
+  height: 1px;
+  background-color: %palette-mid;
+  margin: 4px 8px;
+}
+
+/* --- Scrollbars (slim, modern) ------------------------------------- */
+
+QScrollBar:vertical {
+  background: transparent;
+  width: 12px;
+  margin: 2px;
+  border: none;
+}
+
+QScrollBar::handle:vertical {
+  background: %palette-mid;
+  min-height: 28px;
+  border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+  background: %palette-dark;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+  height: 0;
+  background: transparent;
+}
+
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+  background: transparent;
+}
+
+QScrollBar:horizontal {
+  background: transparent;
+  height: 12px;
+  margin: 2px;
+  border: none;
+}
+
+QScrollBar::handle:horizontal {
+  background: %palette-mid;
+  min-width: 28px;
+  border-radius: 4px;
+}
+
+QScrollBar::handle:horizontal:hover {
+  background: %palette-dark;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+  width: 0;
+  background: transparent;
+}
+
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+  background: transparent;
+}
+
+/* --- Status bar ---------------------------------------------------- */
+
+QStatusBar {
+  border-top: 1px solid %palette-mid;
+}
+
+QStatusBar::item {
+  border: none;
+}
+
+/* --- Splitters ----------------------------------------------------- */
+
+QSplitter::handle {
+  background-color: transparent;
+}
+
+QSplitter::handle:horizontal {
+  width: 4px;
+}
+
+QSplitter::handle:vertical {
+  height: 4px;
+}
+
+QSplitter::handle:hover {
+  background-color: %palette-highlight-lighter;
+}
+
+/* --- Device sync progress pane ------------------------------------- */
+/* The new pane added in Devices tab gets a soft container look so it
+ * reads as a sibling section to the device list above it. Selectors
+ * use the objectName set in DeviceSyncProgressView::DeviceSyncProgressView
+ * and on the header label / list view children. */
+
+QWidget#DeviceSyncProgressView {
+  background-color: %palette-base;
+}
+
+QLabel#DeviceSyncProgressHeader {
+  padding: 6px 8px;
+  color: %palette-windowtext;
+  font-weight: 500;
+}
+
+QListView#DeviceSyncProgressList {
+  border: none;
+  background-color: transparent;
+  padding: 2px;
 }
