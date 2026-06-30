@@ -56,6 +56,7 @@ class AlbumCoverLoader;
 class ConnectedDevice;
 class DeviceLister;
 class DeviceStateFilterModel;
+class DeviceSyncProgressModel;
 
 class DeviceManager : public SimpleTreeModel<DeviceInfo> {
   Q_OBJECT
@@ -98,6 +99,14 @@ class DeviceManager : public SimpleTreeModel<DeviceInfo> {
   void Exit();
 
   DeviceStateFilterModel *connected_devices_model() const { return connected_devices_model_; }
+
+  // Owns a single sync-progress model that's plumbed into the sidebar
+  // device-sync-progress pane. Lives for the lifetime of the DeviceManager,
+  // gets reset (cleared + repopulated) every time a new Organize sync
+  // begins. Single, global instance because at most one device sync is in
+  // flight at any time (the DB mutex inside GPodDevice enforces serial
+  // access already).
+  DeviceSyncProgressModel *sync_progress_model() const { return sync_progress_model_; }
 
   // Get info about devices
   int GetDatabaseId(const QModelIndex &idx) const;
@@ -170,6 +179,7 @@ class DeviceManager : public SimpleTreeModel<DeviceInfo> {
   ScopedPtr<DeviceDatabaseBackend> backend_;
 
   DeviceStateFilterModel *connected_devices_model_;
+  DeviceSyncProgressModel *sync_progress_model_;
 
   QIcon not_connected_overlay_;
 

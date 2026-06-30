@@ -66,6 +66,7 @@
 #include "widgets/linetextedit.h"
 #include "tagreader/tagreaderclient.h"
 #include "collection/collectionbackend.h"
+#include "device/devicesyncprogressmodel.h"
 #include "organize.h"
 #include "organizeformat.h"
 #include "organizesyntaxhighlighter.h"
@@ -94,7 +95,8 @@ OrganizeDialog::OrganizeDialog(const SharedPtr<TaskManager> task_manager,
       tagreader_client_(tagreader_client),
       collection_backend_(collection_backend),
       total_size_(0),
-      devices_(false) {
+      devices_(false),
+      device_sync_progress_model_(nullptr) {
 
   ui_->setupUi(this);
 
@@ -205,6 +207,35 @@ void OrganizeDialog::accept() {
   QObject::connect(organize, &Organize::FileCopied, this, &OrganizeDialog::FileCopied);
   if (collection_backend_) {
     QObject::connect(organize, &Organize::SongPathChanged, &*collection_backend_, &CollectionBackend::SongPathChanged);
+  }
+
+  // Wire per-song progress signals into the sidebar device-sync-progress
+  // pane. The model lives on the main thread; Organize::Start emits
+  // SyncQueueReady synchronously *before* moving itself to the worker
+  // thread, so connecting before Start() means the queue arrives on the
+  // current thread and populates the pane immediately. Subsequent
+  // SongSyncProgress emissions cross thread boundaries safely via Qt's
+  // queued connection auto-detection.
+  // Fall back to the process-wide singleton (registered by DeviceManager) if
+  // no caller set us explicitly. This lets every OrganizeDialog call site --
+  // mainwindow drag-drop, collection right-click "Copy to ...", playlist
+  // right-click, fileview, deviceview cross-device copy -- show device-sync
+  // progress in the sidebar pane without having to be plumbed.
+  DeviceSyncProgressModel *resolved_model = device_sync_progress_model_ ? device_sync_progress_model_ : DeviceSyncProgressModel::instance();
+  if (resolved_model) {
+    DeviceSyncProgressModel *model = resolved_model;
+    // Use the destination's display name as the friendly device label so
+    // the pane header reads e.g. "Syncing to iPod Classic — 3 / 12 done".
+    const QString device_label = destination.data(Qt::DisplayRole).toString();
+    QObject::connect(organize, &Organize::SyncQueueReady, model, [model, device_label](const SongList &queue) {
+      model->StartSync(device_label, queue);
+    });
+    QObject::connect(organize, &Organize::SongSyncProgress, model, &DeviceSyncProgressModel::SongFinished);
+    QObject::connect(organize, &Organize::Finished, model, [model](const QStringList &errors, const QStringList &log) {
+      Q_UNUSED(errors);
+      Q_UNUSED(log);
+      model->EndSync();
+    });
   }
 
   organize->Start();

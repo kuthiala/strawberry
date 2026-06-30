@@ -497,6 +497,12 @@ MainWindow::MainWindow(Application *app,
   collection_view_->view()->setModel(app_->collection()->model()->filter());
   collection_view_->view()->Init(app->task_manager(), app->tagreader_client(), app->network(), app->albumcover_loader(), app->current_albumcover_loader(), app->cover_providers(), app->lyrics_providers(), app->collection(), app->device_manager(), app->streaming_services());
   device_view_->view()->Init(app->task_manager(), app->tagreader_client(), app->device_manager(), app->collection_model()->directory_model());
+  // Plumb the device-sync-progress model into the new bottom pane of the
+  // Devices tab so per-song checkmarks show up during a "Copy to device"
+  // operation. The same model is also reachable globally via the singleton
+  // accessor that OrganizeDialog uses (see DeviceSyncProgressModel::instance),
+  // so this hookup is only needed to feed the view.
+  device_view_->SetSyncProgressModel(app->device_manager()->sync_progress_model());
   playlist_list_->Init(app_->task_manager(), app->tagreader_client(), app_->playlist_manager(), app_->playlist_backend(), app_->device_manager());
 
   organize_dialog_->SetDestinationModel(app_->collection()->model()->directory_model());
