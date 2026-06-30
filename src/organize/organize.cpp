@@ -52,6 +52,23 @@ class OrganizeFormat;
 namespace {
 constexpr int kBatchSize = 10;
 constexpr int kTranscodeProgressInterval = 500;
+
+// Compute the wall-clock delay between the just-failed attempt and the next
+// retry. attempt is 1-based and indicates how many *failed* attempts have
+// happened so far. The first failure (attempt == 1) waits kInitialBackoffMs,
+// the second waits 2 * kInitialBackoffMs, ... capped at kMaxBackoffMs.
+// We use a left-shift instead of std::pow to stay integer-only, and clamp
+// at 30 shifts to avoid undefined behaviour from an overflow if someone
+// raises kMaxAttempts in the future.
+qint64 ComputeBackoffMs(const int attempt) {
+  if (attempt <= 0) return 0;
+  const int shift = qMin(attempt - 1, 30);
+  qint64 delay = static_cast<qint64>(Organize::kInitialBackoffMs) << shift;
+  if (delay > Organize::kMaxBackoffMs || delay < 0) {
+    delay = Organize::kMaxBackoffMs;
+  }
+  return delay;
+}
 }  // namespace
 
 Organize::Organize(const SharedPtr<TaskManager> task_manager,
@@ -184,13 +201,33 @@ void Organize::ProcessSomeFiles() {
   }
 
   // We process files in batches so we can be cancelled part-way through.
+  // Retry-aware scheduling: if the head of the queue is not yet eligible to
+  // run (its retry backoff has not elapsed), we leave it in place and wait
+  // for the next timer tick rather than skipping past it. This preserves the
+  // user-facing processing order so the sidebar checklist still ticks off
+  // top-to-bottom.
+  const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
+  qint64 earliest_due_ms = 0;
   for (int i = 0; i < kBatchSize; ++i) {
     SetSongProgress(0);
 
     if (tasks_pending_.isEmpty()) break;
 
+    // If the next task isn't due yet, stop the batch and re-arm the timer so
+    // we wake up exactly when it becomes due.
+    if (tasks_pending_.first().next_attempt_at_ms_ > now_ms) {
+      earliest_due_ms = tasks_pending_.first().next_attempt_at_ms_;
+      break;
+    }
+
     Task task = tasks_pending_.takeFirst();
-    qLog(Info) << "Processing" << task.song_info_.song_.url().toLocalFile();
+    if (task.attempts_ > 0) {
+      qLog(Info) << "Retrying" << task.song_info_.song_.url().toLocalFile()
+                 << "(attempt" << (task.attempts_ + 1) << "of" << kMaxAttempts << ")";
+    }
+    else {
+      qLog(Info) << "Processing" << task.song_info_.song_.url().toLocalFile();
+    }
 
     // Use a Song instead of a tag reader
     Song song = task.song_info_.song_;
@@ -357,31 +394,86 @@ void Organize::ProcessSomeFiles() {
         Q_EMIT SongPathChanged(song, new_file, destination_->collection_directory_id());
       }
       Q_EMIT SongSyncProgress(task.song_info_.song_, true);
+
+      // Clean up the temporary transcoded file
+      if (!task.transcoded_filename_.isEmpty()) {
+        QFile::remove(task.transcoded_filename_);
+      }
+
+      tasks_complete_++;
     }
     else {
-      // Report the full source path (not just basefilename) so the user can
-      // tell which "04 Time.flac" failed when their library contains multiple
-      // albums with the same filename pattern (e.g. live + studio versions
-      // of the same album). See `.ai/10-ipod-sync.md` §10.10 "UX bug #7".
+      // The attempt failed. Either re-queue with exponential backoff (if we
+      // have retries left) or report a final failure (if we just exhausted
+      // them). Logging the error text on *every* attempt would spam the log,
+      // so we only record it in `log_` on the final failure -- but always
+      // qLog(Warning) so the developer console shows each retry.
+      ++task.attempts_;
       const QString full_path = task.song_info_.song_.url().toLocalFile();
-      files_with_errors_ << (full_path.isEmpty() ? task.song_info_.song_.basefilename() : full_path);
+      const QString reported_path = full_path.isEmpty() ? task.song_info_.song_.basefilename() : full_path;
+
+      if (task.attempts_ < kMaxAttempts) {
+        const qint64 delay_ms = ComputeBackoffMs(task.attempts_);
+        task.next_attempt_at_ms_ = QDateTime::currentMSecsSinceEpoch() + delay_ms;
+        qLog(Warning) << "Sync attempt" << task.attempts_ << "of" << kMaxAttempts
+                      << "failed for" << reported_path
+                      << "-- retrying in" << delay_ms << "ms"
+                      << (error_text.isEmpty() ? QString() : (QStringLiteral(": ") + error_text));
+        // Re-queue at the *front* so retries don't get bumped to the end of
+        // very long queues and the user keeps seeing roughly-sequential
+        // checkmarks; the next_attempt_at_ms_ gate prevents busy-spin and
+        // makes the queue effectively a min-heap on the retry timestamp.
+        tasks_pending_.prepend(task);
+        // Re-emit the queue position to listeners (the pane shows e.g.
+        // "retry 3/10 in 4s" next to the row). Do NOT update files_with_errors_
+        // and do NOT bump tasks_complete_ -- the song is still in flight.
+        Q_EMIT SongSyncRetry(task.song_info_.song_, task.attempts_, kMaxAttempts, delay_ms);
+
+        // Track earliest due so we can rearm the timer with an accurate wait.
+        if (earliest_due_ms == 0 || task.next_attempt_at_ms_ < earliest_due_ms) {
+          earliest_due_ms = task.next_attempt_at_ms_;
+        }
+        // The transcoded file (if any) is preserved so we don't have to
+        // re-encode the same source on every retry. It is cleaned up below
+        // on either success or final failure.
+        break;  // Stop the batch -- the head of the queue is now in the
+                // future and we want the rearm logic below to set the timer
+                // to fire when the retry becomes due rather than burning
+                // through more no-op iterations.
+      }
+
+      // All retries exhausted -- this is a permanent failure for this song.
+      qLog(Error) << "Sync giving up on" << reported_path
+                  << "after" << kMaxAttempts << "attempts"
+                  << (error_text.isEmpty() ? QString() : (QStringLiteral(": ") + error_text));
+      files_with_errors_ << reported_path;
       if (!error_text.isEmpty()) {
         log_ << error_text;
       }
       Q_EMIT SongSyncProgress(task.song_info_.song_, false);
-    }
 
-    // Clean up the temporary transcoded file
-    if (!task.transcoded_filename_.isEmpty()) {
-      QFile::remove(task.transcoded_filename_);
-    }
+      // Clean up the temporary transcoded file
+      if (!task.transcoded_filename_.isEmpty()) {
+        QFile::remove(task.transcoded_filename_);
+      }
 
-    tasks_complete_++;
+      tasks_complete_++;
+    }
   }
   SetSongProgress(0);
 
   if (!process_files_timer_->isActive()) {
-    process_files_timer_->start();
+    // If we know exactly when the next retry becomes due, sleep until then
+    // (capped to at least the default 100 ms tick) instead of busy-polling.
+    if (earliest_due_ms > 0) {
+      const qint64 wait_ms = qMax<qint64>(100, earliest_due_ms - QDateTime::currentMSecsSinceEpoch());
+      // Cap at kMaxBackoffMs to avoid scheduling a single Qt timer with an
+      // unreasonably large interval (Qt clamps to int32 ms anyway).
+      process_files_timer_->start(static_cast<int>(qMin<qint64>(wait_ms, kMaxBackoffMs)));
+    }
+    else {
+      process_files_timer_->start();
+    }
   }
 
 

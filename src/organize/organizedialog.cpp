@@ -231,6 +231,11 @@ void OrganizeDialog::accept() {
       model->StartSync(device_label, queue);
     });
     QObject::connect(organize, &Organize::SongSyncProgress, model, &DeviceSyncProgressModel::SongFinished);
+    // Per-attempt retry annotation. The pane uses this to flip the row
+    // icon to amber and show "[retry N/10 in Xs]" while we wait between
+    // exponential-backoff attempts; SongSyncProgress is only emitted when
+    // the song either succeeds or runs out of retries entirely.
+    QObject::connect(organize, &Organize::SongSyncRetry, model, &DeviceSyncProgressModel::SongRetryScheduled);
     QObject::connect(organize, &Organize::Finished, model, [model](const QStringList &errors, const QStringList &log) {
       Q_UNUSED(errors);
       Q_UNUSED(log);

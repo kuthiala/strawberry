@@ -77,6 +77,18 @@ class Organize : public QObject {
 
   void Start();
 
+ public:
+  // Retry policy for songs that fail to copy or commit to the destination.
+  // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 64s, 128s, 256s, 300s (capped),
+  // then final-fail on the 10th failed attempt. Total worst-case wait before
+  // giving up on a single song is ~17 minutes. These values were chosen so a
+  // transient device hiccup (USB unplug-replug, iTunesDB locked by Finder,
+  // libgpod sync race) gets several quick retries while a hard failure
+  // (corrupted source file, no free space) still surfaces within minutes.
+  static constexpr int kMaxAttempts = 10;
+  static constexpr int kInitialBackoffMs = 2000;
+  static constexpr int kMaxBackoffMs = 5 * 60 * 1000;
+
  Q_SIGNALS:
   void Finished(const QStringList &files_with_errors, const QStringList &log);
   void FileCopied(const int database_id);
@@ -86,10 +98,17 @@ class Organize : public QObject {
   // are about to be processed. Used by the device-sync-progress pane in the
   // sidebar to populate its checklist.
   void SyncQueueReady(const SongList &queue);
-  // Emitted after each song finishes (success or failure) so the sidebar
-  // pane can mark it with a green check / red cross. Always emitted in the
-  // order the songs were processed.
+  // Emitted after each song finishes (success or *final* failure -- i.e. all
+  // retries exhausted) so the sidebar pane can mark it with a green check /
+  // red cross. Always emitted in the order the songs were processed.
   void SongSyncProgress(const Song &song, const bool success);
+  // Emitted whenever a song fails an individual attempt but is being
+  // re-queued for another try. The sidebar pane uses this to annotate the
+  // row with "retry N/10 in Xs" without flipping the row to Failed (which
+  // would imply giving up on the song). attempt is 1-based and indicates
+  // the attempt that just failed; the next attempt is attempt + 1. delay_ms
+  // is the wall-clock delay before the next attempt will start.
+  void SongSyncRetry(const Song &song, const int attempt, const int max_attempts, const qint64 delay_ms);
 
  protected:
   void timerEvent(QTimerEvent *e) override;
@@ -109,13 +128,24 @@ class Organize : public QObject {
   struct Task {
     explicit Task(const NewSongInfo &song_info = NewSongInfo())
         : song_info_(song_info),
-          transcode_progress_(0.0) {}
+          transcode_progress_(0.0),
+          attempts_(0),
+          next_attempt_at_ms_(0) {}
 
     NewSongInfo song_info_;
     float transcode_progress_;
     QString transcoded_filename_;
     QString new_extension_;
     Song::FileType new_filetype_;
+
+    // Retry bookkeeping. attempts_ counts how many *failed* attempts have
+    // already happened for this task; on first entry it is 0. After the Nth
+    // failure (N = 1..9) the task is re-queued with next_attempt_at_ms_ set
+    // to the wall-clock time it becomes eligible to run again. On the 10th
+    // failure (N == kMaxAttempts) the task is marked permanently failed
+    // and added to files_with_errors_.
+    int attempts_;
+    qint64 next_attempt_at_ms_;  // Qt epoch ms; 0 = run immediately
   };
 
   QThread *thread_;
