@@ -250,27 +250,62 @@ void Organize::ProcessSomeFiles() {
     job.remove_original_ = !copy_;
     job.playlist_ = playlist_;
 
+    // [cover-art trace] Log the inputs to the cover-resolution cascade so we
+    // can see in production exactly which branch fires for a transcoded
+    // FLAC → ALAC iPod copy. Bug #5: covers vanish on reconnect after a
+    // Strawberry "Copy to Device" of a FLAC (my probe against the same iPod
+    // worked end-to-end; the difference is this Organize→Transcoder path).
+    qLog(Info) << "[cover-trace] Organize: original-url=" << task.song_info_.song_.url().toString()
+               << " transcoded=" << !task.transcoded_filename_.isEmpty()
+               << " dest=" << job.destination_
+               << " albumcover_=" << job.albumcover_
+               << " device-source=" << (destination_->source() == Song::Source::Device)
+               << " art_manual_valid=" << task.song_info_.song_.art_manual_is_valid()
+               << " art_manual_unset=" << task.song_info_.song_.art_unset()
+               << " art_manual=" << task.song_info_.song_.art_manual().toString()
+               << " art_automatic_valid=" << task.song_info_.song_.art_automatic_is_valid()
+               << " art_automatic=" << task.song_info_.song_.art_automatic().toString();
+
     if (task.song_info_.song_.art_manual_is_valid() && !task.song_info_.song_.art_unset()) {
       if (task.song_info_.song_.art_manual().isLocalFile() && QFile::exists(task.song_info_.song_.art_manual().toLocalFile())) {
         job.cover_source_ = task.song_info_.song_.art_manual().toLocalFile();
+        qLog(Info) << "[cover-trace] Organize: using art_manual local file" << job.cover_source_;
       }
       else if (task.song_info_.song_.art_manual().scheme().isEmpty() && QFile::exists(task.song_info_.song_.art_manual().path())) {
         job.cover_source_ = task.song_info_.song_.art_manual().path();
+        qLog(Info) << "[cover-trace] Organize: using art_manual schemeless path" << job.cover_source_;
+      }
+      else {
+        qLog(Info) << "[cover-trace] Organize: art_manual valid but path not on disk:" << task.song_info_.song_.art_manual().toString();
       }
     }
     else if (task.song_info_.song_.art_automatic_is_valid()) {
       if (task.song_info_.song_.art_automatic().isLocalFile() && QFile::exists(task.song_info_.song_.art_automatic().toLocalFile())) {
         job.cover_source_ = task.song_info_.song_.art_automatic().toLocalFile();
+        qLog(Info) << "[cover-trace] Organize: using art_automatic local file" << job.cover_source_;
       }
       else if (task.song_info_.song_.art_automatic().scheme().isEmpty() && QFile::exists(task.song_info_.song_.art_automatic().path())) {
         job.cover_source_ = task.song_info_.song_.art_automatic().path();
+        qLog(Info) << "[cover-trace] Organize: using art_automatic schemeless path" << job.cover_source_;
+      }
+      else {
+        qLog(Info) << "[cover-trace] Organize: art_automatic valid but path not on disk:" << task.song_info_.song_.art_automatic().toString();
       }
     }
     else if (destination_->source() == Song::Source::Device) {
-      const TagReaderResult result = tagreader_client_->LoadCoverImageBlocking(task.song_info_.song_.url().toLocalFile(), job.cover_image_);
+      const QString embed_src = task.song_info_.song_.url().toLocalFile();
+      qLog(Info) << "[cover-trace] Organize: falling through to embedded-art load from" << embed_src
+                 << " exists=" << QFile::exists(embed_src);
+      const TagReaderResult result = tagreader_client_->LoadCoverImageBlocking(embed_src, job.cover_image_);
+      qLog(Info) << "[cover-trace] Organize: LoadCoverImageBlocking result=" << result.success()
+                 << " image.isNull=" << job.cover_image_.isNull()
+                 << " image.size=" << job.cover_image_.size();
       if (!result.success()) {
         qLog(Error) << "Could not load embedded art from" << task.song_info_.song_.url() << result.error_string();
       }
+    }
+    else {
+      qLog(Info) << "[cover-trace] Organize: no cover-source branch matched (destination is not Device or song has no art metadata)";
     }
 
     if (!job.cover_source_.isEmpty()) {
@@ -278,6 +313,11 @@ void Organize::ProcessSomeFiles() {
     }
 
     job.progress_ = std::bind(&Organize::SetSongProgress, this, std::placeholders::_1, !task.transcoded_filename_.isEmpty());
+
+    qLog(Info) << "[cover-trace] Organize: handing job to CopyToStorage"
+               << " cover_source_=" << job.cover_source_
+               << " cover_image_.isNull=" << job.cover_image_.isNull()
+               << " cover_image_.size=" << job.cover_image_.size();
 
     QString error_text;
     if (destination_->CopyToStorage(job, error_text)) {
@@ -289,7 +329,12 @@ void Organize::ProcessSomeFiles() {
       }
     }
     else {
-      files_with_errors_ << task.song_info_.song_.basefilename();
+      // Report the full source path (not just basefilename) so the user can
+      // tell which "04 Time.flac" failed when their library contains multiple
+      // albums with the same filename pattern (e.g. live + studio versions
+      // of the same album). See `.ai/10-ipod-sync.md` §10.10 "UX bug #7".
+      const QString full_path = task.song_info_.song_.url().toLocalFile();
+      files_with_errors_ << (full_path.isEmpty() ? task.song_info_.song_.basefilename() : full_path);
       if (!error_text.isEmpty()) {
         log_ << error_text;
       }
