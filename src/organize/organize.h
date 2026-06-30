@@ -82,6 +82,15 @@ class Organize : public QObject {
   void FileCopied(const int database_id);
   void SongPathChanged(const Song &song, const QFileInfo &new_file, const std::optional<int> new_collection_directory_id);
 
+  // Emitted once when Start() is called, with the ordered list of songs that
+  // are about to be processed. Used by the device-sync-progress pane in the
+  // sidebar to populate its checklist.
+  void SyncQueueReady(const SongList &queue);
+  // Emitted after each song finishes (success or failure) so the sidebar
+  // pane can mark it with a green check / red cross. Always emitted in the
+  // order the songs were processed.
+  void SongSyncProgress(const Song &song, const bool success);
+
  protected:
   void timerEvent(QTimerEvent *e) override;
 

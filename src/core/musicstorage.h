@@ -90,6 +90,14 @@ class MusicStorage {
 
   virtual bool StartCopy(QList<Song::FileType> *supported_types) { Q_UNUSED(supported_types); return true; }
   virtual bool CopyToStorage(const CopyJob &job, QString &error_text) = 0;
+  // Commit the storage after a single CopyToStorage so that the unit of work
+  // is one song -- if the next song fails (or the app crashes), the work done
+  // for the song just copied is preserved on disk. Default no-op for storages
+  // that don't have an explicit commit step (e.g. plain filesystem); GPodDevice
+  // overrides this to flush the iTunesDB via WriteDatabase. Returns true on
+  // success; on failure, error_text describes the problem and Organize will
+  // treat the just-copied song as failed.
+  virtual bool CommitCopy(QString &error_text) { Q_UNUSED(error_text); return true; }
   virtual bool FinishCopy(bool success, QString &error_text) { Q_UNUSED(error_text); return success; }
 
   virtual void StartDelete() {}

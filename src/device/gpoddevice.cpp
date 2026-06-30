@@ -536,6 +536,24 @@ void GPodDevice::Finish(const bool success) {
 
 }
 
+bool GPodDevice::CommitCopy(QString &error_text) {
+
+  // Per-song unit of work: persist the iTunesDB to disk after every
+  // individual CopyToStorage. With Bug #5 fixed, FinishCopy() at the
+  // end of a batch already guarantees the in-memory db_ is flushed --
+  // but if the app crashes (or the device is yanked) mid-batch,
+  // everything in db_ for the current session is lost. Calling
+  // WriteDatabase per song means the unit of work is one song:
+  // after each successful sync, the next reconnect sees the song
+  // already on disk, regardless of what happened to the rest of the
+  // batch. iTunesDB writes for the iPod Classic at hand are O(1 s)
+  // even for thousands of tracks (libgpod walks the in-memory list
+  // and serialises), so the per-song overhead is acceptable for the
+  // crash-safety it buys.
+  return WriteDatabase(error_text);
+
+}
+
 bool GPodDevice::FinishCopy(bool success, QString &error_text) {
 
   // Bug #5 (see .ai/10-ipod-sync.md §10.8):

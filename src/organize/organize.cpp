@@ -115,6 +115,17 @@ void Organize::Start() {
   task_id_ = task_manager_->StartTask(tr("Organizing files"));
   task_manager_->SetTaskBlocksCollectionScans(task_id_);
 
+  // Publish the ordered queue of songs to anyone listening (the sidebar
+  // device-sync-progress pane in particular). Emitted before we move to the
+  // worker thread so receivers connected with the default AutoConnection
+  // still get the queue synchronously on the main thread.
+  SongList queue;
+  queue.reserve(tasks_pending_.count());
+  for (const Task &task : std::as_const(tasks_pending_)) {
+    queue << task.song_info_.song_;
+  }
+  Q_EMIT SyncQueueReady(queue);
+
   thread_ = new QThread;
   QObject::connect(thread_, &QThread::started, this, &Organize::ProcessSomeFiles);
 
@@ -320,13 +331,32 @@ void Organize::ProcessSomeFiles() {
                << " cover_image_.size=" << job.cover_image_.size();
 
     QString error_text;
-    if (destination_->CopyToStorage(job, error_text)) {
+    bool song_succeeded = destination_->CopyToStorage(job, error_text);
+    if (song_succeeded) {
+      // Per-song unit of work: ask the destination to commit the just-copied
+      // song durably (e.g. flush iTunesDB on iPods) before we move on to the
+      // next one. This is a no-op for plain filesystem storages, and an
+      // iTunesDB write on GPodDevice. If the commit fails we treat the
+      // just-copied song as a failure so the user knows to retry it.
+      QString commit_error;
+      if (!destination_->CommitCopy(commit_error)) {
+        qLog(Error) << "Per-song commit failed for" << task.song_info_.song_.url().toLocalFile() << ":" << commit_error;
+        if (!commit_error.isEmpty()) {
+          if (error_text.isEmpty()) error_text = commit_error;
+          else error_text += QStringLiteral("; ") + commit_error;
+        }
+        song_succeeded = false;
+      }
+    }
+
+    if (song_succeeded) {
       if (job.remove_original_ && song.is_local_collection_song() && destination_->source() == Song::Source::Collection) {
         // Notify other aspects of system that song has been invalidated
         QString root = destination_->LocalPath();
         QFileInfo new_file = QFileInfo(root + QLatin1Char('/') + task.song_info_.new_filename_);
         Q_EMIT SongPathChanged(song, new_file, destination_->collection_directory_id());
       }
+      Q_EMIT SongSyncProgress(task.song_info_.song_, true);
     }
     else {
       // Report the full source path (not just basefilename) so the user can
@@ -338,6 +368,7 @@ void Organize::ProcessSomeFiles() {
       if (!error_text.isEmpty()) {
         log_ << error_text;
       }
+      Q_EMIT SongSyncProgress(task.song_info_.song_, false);
     }
 
     // Clean up the temporary transcoded file

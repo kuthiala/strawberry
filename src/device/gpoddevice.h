@@ -79,6 +79,12 @@ class GPodDevice : public ConnectedDevice, public virtual MusicStorage {
 
   bool StartCopy(QList<Song::FileType> *supported_filetypes) override;
   bool CopyToStorage(const CopyJob &job, QString &error_text) override;
+  // Per-song unit of work: flush the iTunesDB to disk after every CopyToStorage
+  // so the just-copied track is durable even if the next song fails or the app
+  // crashes. Without this, libgpod's in-memory state would survive only until
+  // FinishCopy and a single mid-batch crash would still lose the entire
+  // session's progress (despite the audio files already being on NAND).
+  bool CommitCopy(QString &error_text) override;
   bool FinishCopy(bool success, QString &error_text) override;
 
   void StartDelete() override;
