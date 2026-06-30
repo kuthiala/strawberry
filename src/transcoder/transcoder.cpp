@@ -82,8 +82,18 @@ struct SuitableElement {
 
   explicit SuitableElement(const QString &name = QString(), int rank = 0) : name_(name), rank_(rank) {}
 
+  // Stable, deterministic ordering: higher rank wins, and on ties
+  // prefer plain libav encoders (e.g. avenc_alac) over their AudioToolbox
+  // shims (e.g. avenc_alac_at). The "_at" backed encoders on macOS often
+  // fail to propagate EOS through the pipeline which causes mp4mux to
+  // never finalize the file (manifests as transcoding stuck at 100%).
   bool operator<(const SuitableElement &other) const {
-    return rank_ < other.rank_;
+    if (rank_ != other.rank_) return rank_ < other.rank_;
+    const bool this_at = name_.endsWith("_at"_L1);
+    const bool other_at = other.name_.endsWith("_at"_L1);
+    if (this_at != other_at) return this_at;  // non-_at sorts "greater" -> picked by .last()
+    // Final fallback: lexicographic by name for repeatability.
+    return name_ < other.name_;
   }
 
   QString name_;
@@ -110,6 +120,7 @@ GstElement *Transcoder::CreateElementForMimeType(GstElementFactoryListType eleme
   GstRegistry *registry = gst_registry_get();
   GList *const features = gst_registry_get_feature_list(registry, GST_TYPE_ELEMENT_FACTORY);
 
+  bool has_native = false;  // any non-libav (i.e. non-avenc/avmux) candidate?
   for (GList *f = features; f; f = g_list_next(f)) {
     GstElementFactory *factory = GST_ELEMENT_FACTORY(f->data);
 
@@ -118,11 +129,25 @@ GstElement *Transcoder::CreateElementForMimeType(GstElementFactoryListType eleme
       // check if the element factory supports the target caps
       if (gst_element_factory_can_src_any_caps(factory, target_caps)) {
         const QString name = QString::fromUtf8(GST_OBJECT_NAME(factory));
-        int rank = static_cast<int>(gst_plugin_feature_get_rank(GST_PLUGIN_FEATURE(factory)));
-        if (name.startsWith("avmux"_L1) || name.startsWith("avenc"_L1)) {
-          rank = -1;  // ffmpeg usually sucks
+        const int rank = static_cast<int>(gst_plugin_feature_get_rank(GST_PLUGIN_FEATURE(factory)));
+        if (!name.startsWith("avmux"_L1) && !name.startsWith("avenc"_L1)) {
+          has_native = true;
         }
         suitable_elements_ << SuitableElement(name, rank);
+      }
+    }
+  }
+
+  // If a native (non-libav) encoder/muxer exists, demote the libav fallbacks
+  // because they're often lower quality / less tested. But if libav is the
+  // only option (e.g. ALAC encoding has no native gst plugin), keep their
+  // original ranks so we still pick the best libav variant. The tiebreaker
+  // in operator< will then prefer e.g. avenc_alac over avenc_alac_at.
+  if (has_native) {
+    for (int i = 0; i < suitable_elements_.size(); ++i) {
+      const QString &n = suitable_elements_[i].name_;
+      if (n.startsWith("avmux"_L1) || n.startsWith("avenc"_L1)) {
+        suitable_elements_[i].rank_ = -1;
       }
     }
   }
