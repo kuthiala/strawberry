@@ -51,6 +51,7 @@ class QCloseEvent;
 class TaskManager;
 class CollectionBackend;
 class CollectionDirectoryModel;
+class DeviceSyncProgressModel;
 class OrganizeErrorDialog;
 class Ui_OrganizeDialog;
 
@@ -86,6 +87,12 @@ class OrganizeDialog : public QDialog {
   static Organize::NewSongInfoList ComputeNewSongsFilenames(const SongList &songs, const OrganizeFormat &format, const QString &extension = QString(), const QString &root = QString());
 
   void SetPlaylist(const QString &playlist);
+
+  // Optional: plug in the global device-sync progress model so that, on
+  // accept(), the per-song progress signals from the active Organize get
+  // wired into it. Only relevant for device destinations; for non-device
+  // destinations passing a model is harmless (signals just won't fire).
+  void SetDeviceSyncProgressModel(DeviceSyncProgressModel *model) { device_sync_progress_model_ = model; }
 
  protected:
   void showEvent(QShowEvent *e) override;
@@ -140,6 +147,10 @@ class OrganizeDialog : public QDialog {
 
   QPointer<CollectionDirectoryModel> collection_directory_model_;
   QStringList source_roots_;
+  // Not owned -- set by the caller via SetDeviceSyncProgressModel. nullptr if
+  // no progress pane is interested (e.g. the dialog was constructed for a
+  // collection-side organize).
+  DeviceSyncProgressModel *device_sync_progress_model_;
 };
 
 #endif  // ORGANISEDIALOG_H

@@ -927,6 +927,8 @@ set(SOURCES
   src/device/devicestatefiltermodel.cpp
   src/device/deviceviewcontainer.cpp
   src/device/deviceview.cpp
+  src/device/devicesyncprogressmodel.cpp
+  src/device/devicesyncprogressview.cpp
 )
 
 set(HEADERS
@@ -1226,6 +1228,8 @@ set(HEADERS
   src/device/devicestatefiltermodel.h
   src/device/deviceviewcontainer.h
   src/device/deviceview.h
+  src/device/devicesyncprogressmodel.h
+  src/device/devicesyncprogressview.h
 )
 
 set(UI

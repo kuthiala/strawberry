@@ -28,7 +28,10 @@
 #include <QWidget>
 #include <QString>
 
+class DeviceSyncProgressModel;
+class DeviceSyncProgressView;
 class DeviceView;
+class QSplitter;
 class Ui_DeviceViewContainer;
 
 class DeviceViewContainer : public QWidget {
@@ -40,10 +43,19 @@ class DeviceViewContainer : public QWidget {
 
   DeviceView *view() const;
 
+  // Plug the sync-progress model in so the bottom pane reflects the current
+  // device-copy operation. Called from MainWindow once DeviceManager is
+  // available.
+  void SetSyncProgressModel(DeviceSyncProgressModel *model);
+
  protected:
 
  private:
   Ui_DeviceViewContainer *ui_;
+  // Owned by the layout; raw pointers are fine because Qt cleans them up
+  // when this widget is destroyed.
+  QSplitter *splitter_;
+  DeviceSyncProgressView *progress_view_;
 };
 
 #endif  // DEVICEVIEWCONTAINER_H
