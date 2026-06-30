@@ -1779,8 +1779,55 @@ void Song::ToItdb(Itdb_Track *track) const {
   track->bitrate = d->bitrate_;
   track->samplerate = d->samplerate_;
 
-  track->type1 = (d->filetype_ == FileType::MPEG ? 1 : 0);
-  track->type2 = (d->filetype_ == FileType::MPEG ? 1 : 0);
+  // Set track->filetype to the iTunes-standard descriptor string. libgpod's
+  // itdb_track_set_defaults() (run from itdb_track_add) keys off this string
+  // to fill in the magic fields `unk126` and `unk144` which the iPod firmware
+  // uses to decide whether to surface a track in the Music menus. If filetype
+  // is NULL the defaults fall through to the "unknown blob" branch
+  // (unk126=0x0000, unk144=0x0000) and the iPod silently hides the track even
+  // though the file is on disk and the entry is in the iTunesDB. Also set
+  // type1/type2 per libgpod's itdb.h documentation: type1 = 0x00 for CBR
+  // MP3/AAC and 0x01 for VBR MP3; type2 = 0x01 for MP3 and 0x00 for AAC.
+  switch (d->filetype_) {
+    case FileType::MPEG:
+      track->filetype = strdup("MPEG audio file");
+      track->type1 = 1;  // VBR is the safe default (matches what iTunes writes)
+      track->type2 = 1;
+      break;
+    case FileType::MP4:  // AAC in MP4 container
+      track->filetype = strdup("AAC audio file");
+      track->type1 = 0;
+      track->type2 = 0;
+      break;
+    case FileType::ALAC:  // ALAC in MP4 container
+      track->filetype = strdup("Apple Lossless audio file");
+      track->type1 = 0;
+      track->type2 = 0;
+      break;
+    case FileType::WAV:
+      track->filetype = strdup("WAV audio file");
+      track->type1 = 0;
+      track->type2 = 0;
+      break;
+    case FileType::AIFF:
+      track->filetype = strdup("AIFF audio file");
+      track->type1 = 0;
+      track->type2 = 0;
+      break;
+    case FileType::FLAC:
+      // iPod can't play FLAC natively but be honest about the codec so libgpod
+      // and any host-side tools see correct metadata.
+      track->filetype = strdup("FLAC audio file");
+      track->type1 = 0;
+      track->type2 = 0;
+      break;
+    default:
+      // Leave filetype NULL — libgpod's "unknown blob" defaults apply.
+      track->type1 = 0;
+      track->type2 = 0;
+      break;
+  }
+
   track->mediatype = 1;  // Audio
   track->size = static_cast<uint>(d->filesize_);
   track->time_modified = d->mtime_;
