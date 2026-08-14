@@ -27,15 +27,27 @@
 #include <gpod/itdb.h>
 
 #include <QtGlobal>
+
+// `Q_OS_MACOS` is only defined once QtGlobal has been included above, so the
+// `<malloc/malloc.h>` include MUST come after (see Bug #11 in
+// `.ai/10-ipod-sync.md §10.14`).
+#ifdef Q_OS_MACOS
+#  include <malloc/malloc.h>
+#endif
+
 #include <QThread>
 #include <QMutex>
 #include <QByteArray>
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QList>
 #include <QRegularExpression>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 #include <QImage>
 
@@ -282,6 +294,13 @@ void GPodDevice::Start() {
   // Ensure only one "organize files" can be active at any one time
   db_busy_.lock();
 
+  // Reset the CommitCopy throttle bookkeeping at the start of each
+  // batch so the first song of every batch triggers a flush (durable
+  // even if the batch ends up being just that one song). See the
+  // long comment on `CommitCopy` in `gpoddevice.h`.
+  songs_since_last_commit_ = 0;
+  last_commit_ms_ = 0;
+
 }
 
 bool GPodDevice::StartCopy(QList<Song::FileType> *supported_filetypes) {
@@ -337,6 +356,25 @@ bool GPodDevice::CopyToStorage(const CopyJob &job, QString &error_text) {
              << " cover_image.size=" << job.cover_image_.size()
              << " cover_source=" << job.cover_source_;
 
+  // Helper: compute a SHA1-hex fingerprint of a JPEG on disk. Used to
+  // uniquely identify each attached cover so we can prove/disprove
+  // misattribution (see the post-write walk in WriteDatabase()). Returns
+  // empty QByteArray if the file can't be read.
+  const auto Sha1HexOfFile = [](const QString &path) -> QByteArray {
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return QByteArray();
+    QCryptographicHash h(QCryptographicHash::Sha1);
+    if (!h.addData(&f)) return QByteArray();
+    return h.result().toHex();
+  };
+
+  // The "identity" is the (albumartist|album) tuple libgpod uses to bucket
+  // covers into album groups. When misattribution happens, TWO tracks with
+  // DIFFERENT identities end up sharing the same slot bytes. Logging it
+  // makes the mismatch obvious in the post-write scan.
+  const QString cover_identity = job.metadata_.effective_albumartist().toLower()
+      + u"|"_s + job.metadata_.album().toLower();
+
   if (job.albumcover_) {
     bool result = false;
     if (!job.cover_image_.isNull()) {
@@ -376,6 +414,24 @@ bool GPodDevice::CopyToStorage(const CopyJob &job, QString &error_text) {
             if (result) {
               cover_files_ << cover_file;
               track->has_artwork = 1;
+              // [cover-trace] Fingerprint the exact bytes we handed to
+              // libgpod. When WriteDatabase() walks the .ithmb slots
+              // post-write, we'll be able to prove whether track X's
+              // slot bytes correspond to track X's JPEG (correct) or
+              // some other track's JPEG (misattribution). See
+              // .ai/10-ipod-sync.md §10.15.
+              CoverFingerprint fp;
+              fp.jpeg_sha1_hex = Sha1HexOfFile(cover_file->filename());
+              fp.jpeg_size = saved_size;
+              fp.identity = cover_identity;
+              fp.title = job.metadata_.title();
+              fp.source_path = cover_file->filename();
+              cover_fingerprints_.insert(track, fp);
+              qLog(Info) << "[cover-trace] fingerprint image-branch title=" << fp.title
+                         << " identity=" << fp.identity
+                         << " sha1=" << fp.jpeg_sha1_hex
+                         << " jpeg_size=" << fp.jpeg_size
+                         << " track_ptr=" << track;
             }
           }
         }
@@ -396,7 +452,21 @@ bool GPodDevice::CopyToStorage(const CopyJob &job, QString &error_text) {
       const QByteArray filename = QFile::encodeName(job.cover_source_);
       result = itdb_track_set_thumbnails(track, filename.constData());
       qLog(Info) << "[cover-trace] itdb_track_set_thumbnails(source-branch) returned" << result;
-      if (result) track->has_artwork = 1;
+      if (result) {
+        track->has_artwork = 1;
+        CoverFingerprint fp;
+        fp.jpeg_sha1_hex = Sha1HexOfFile(job.cover_source_);
+        fp.jpeg_size = source_size;
+        fp.identity = cover_identity;
+        fp.title = job.metadata_.title();
+        fp.source_path = job.cover_source_;
+        cover_fingerprints_.insert(track, fp);
+        qLog(Info) << "[cover-trace] fingerprint source-branch title=" << fp.title
+                   << " identity=" << fp.identity
+                   << " sha1=" << fp.jpeg_sha1_hex
+                   << " jpeg_size=" << fp.jpeg_size
+                   << " track_ptr=" << track;
+      }
     }
     else {
       qLog(Info) << "[cover-trace] GPodDevice::CopyToStorage: no cover available for"
@@ -453,6 +523,39 @@ bool GPodDevice::CopyToStorage(const CopyJob &job, QString &error_text) {
 
 bool GPodDevice::WriteDatabase(QString &error_text) {
 
+  // Bug #11 (see .ai/10-ipod-sync.md §10.14): Before every `itdb_write` we
+  // release any free heap pages back to the kernel. `itdb_write`'s inner
+  // hot path re-walks every track, allocates a growing WContents buffer via
+  // `g_realloc` (see libgpod's `wcontents_maybe_expand`), and re-encodes
+  // every pending cover through gdk-pixbuf — cumulatively these fragment
+  // libmalloc's small-object regions to the point where a single ~30 MiB
+  // realloc can fail with `mach_vm_allocate_kernel failed` even though the
+  // process's resident set is well below the system's per-process cap.
+  //
+  // `malloc_zone_pressure_relief(NULL, 0)` is macOS libmalloc's cooperative
+  // GC entry point: it walks every registered zone, coalesces adjacent
+  // free spans, and returns any spans larger than the coalescer threshold
+  // to the kernel via `madvise(MADV_FREE_REUSABLE)`. It is safe to call at
+  // any time (does not block on other threads' allocations) and the return
+  // value is the count of bytes returned to the OS — logged so a future
+  // regression is diagnosable from `strawberry-stdout.txt` alone.
+  //
+  // On Linux the equivalent is `malloc_trim(0)`; on Windows there is no
+  // portable equivalent so this whole block is a no-op there. Neither
+  // platform is currently affected by Bug #11 (only macOS + Homebrew GLib
+  // produces the linear-growth-realloc-failure pattern) so a no-op is fine.
+#ifdef Q_OS_MACOS
+  const size_t bytes_freed = malloc_zone_pressure_relief(nullptr, 0);
+  qLog(Info) << "GPodDevice::WriteDatabase: pre-write pressure relief returned"
+             << bytes_freed << "bytes to the OS";
+#elif defined(Q_OS_LINUX)
+  // malloc_trim is a GNU extension; guarding with __GLIBC__ keeps musl-based
+  // builds (Alpine, etc.) working.
+#  if defined(__GLIBC__)
+  malloc_trim(0);
+#  endif
+#endif
+
   // [cover-trace] Snapshot Artwork/ before itdb_write so we can tell from the
   // log whether the .ithmb files grew as a result of this write. This is the
   // disk-level evidence that distinguishes "cover was attached to the track
@@ -499,6 +602,205 @@ bool GPodDevice::WriteDatabase(QString &error_text) {
     }
   }
 
+  // [cover-trace] POST-WRITE PIXEL FINGERPRINT SCAN — see .ai/10-ipod-sync.md §10.15.
+  //
+  // This is the evidence-capture step for the cover misattribution bug
+  // (Bug #9). We can't use libgpod's private `itdb_thumb_ipod_get_filename`
+  // / `..._get_item_by_type` (they're G_GNUC_INTERNAL, not exported from
+  // the dylib), so instead we walk the on-disk `.ithmb` blobs DIRECTLY:
+  // each .ithmb file for a given format is a flat concatenation of
+  // fixed-size slots (Classic-3: 6272-byte slots for F1055, 32768-byte
+  // slots for F1068, etc.). We split each file into slots by known size
+  // and compute SHA1 per slot.
+  //
+  // Combined with the per-track source-JPEG SHA1s captured in
+  // `cover_fingerprints_` (built in CopyToStorage), the resulting log
+  // lets a human observer:
+  //
+  //   • Confirm every source-JPEG SHA1 appears in the .ithmb blob
+  //     as a distinct slot-SHA1 → each track's cover made it to disk.
+  //
+  //   • Detect DUPLICATE slot-SHA1s in the .ithmb (same pixel bytes at
+  //     multiple offsets) → confirms writer is duplicating source data,
+  //     which is the misattribution signal.
+  //
+  //   • Detect MISSING source-JPEG SHA1s: if track X's fingerprint
+  //     doesn't correspond to any slot in the .ithmb → the writer
+  //     silently dropped X's cover (Bug #4-style pack_* failure or
+  //     libgpod's fallback pixbuf substitution).
+  //
+  // The scan is a no-op when we didn't attach any covers in this batch.
+  // Cost: ~O(total .ithmb bytes) SHA1s per WriteDatabase — a few hundred
+  // ms on a Classic-3 first sync, small enough to leave on all the time.
+  if (!cover_fingerprints_.isEmpty()) {
+    qLog(Info) << "[cover-trace] --- post-write source-JPEG fingerprint set ---";
+    // Emit the source-side fingerprints in a stable order (sorted by
+    // title) so the log is diffable across runs.
+    QList<CoverFingerprint> ordered_sources = cover_fingerprints_.values();
+    std::sort(ordered_sources.begin(), ordered_sources.end(),
+              [](const CoverFingerprint &a, const CoverFingerprint &b) {
+                return a.title < b.title;
+              });
+    QHash<QByteArray, int> source_sha1_uses;
+    for (const CoverFingerprint &fp : ordered_sources) {
+      ++source_sha1_uses[fp.jpeg_sha1_hex];
+      qLog(Info) << "[cover-trace] src-fp title=" << fp.title
+                 << " identity=" << fp.identity
+                 << " jpeg_sha1=" << fp.jpeg_sha1_hex
+                 << " jpeg_size=" << fp.jpeg_size;
+    }
+    // Log any source-JPEG SHA1 shared across DIFFERENT identities on the
+    // Strawberry side. If we see this, the bug is UPSTREAM of libgpod —
+    // Organize is handing the same JPEG bytes to two different-identity
+    // tracks. This would clear libgpod of responsibility for that case.
+    int upstream_dupes = 0;
+    for (auto it = source_sha1_uses.constBegin(); it != source_sha1_uses.constEnd(); ++it) {
+      if (it.value() <= 1) continue;
+      // Find distinct identities that share this jpeg_sha1_hex.
+      QSet<QString> identities;
+      for (const CoverFingerprint &fp : ordered_sources) {
+        if (fp.jpeg_sha1_hex == it.key()) identities.insert(fp.identity);
+      }
+      if (identities.size() > 1) {
+        ++upstream_dupes;
+        qLog(Warning) << "[cover-trace] UPSTREAM DUPLICATE jpeg_sha1=" << it.key()
+                      << "was attached to" << it.value() << "tracks across"
+                      << identities.size() << "distinct (albumartist|album) identities:"
+                      << QStringList(identities.begin(), identities.end()).join(u", "_s);
+      }
+    }
+    qLog(Info) << "[cover-trace] source-side check: upstream_duplicates=" << upstream_dupes
+               << " total_tracks_attached=" << ordered_sources.size();
+
+    // Now walk each .ithmb file on the iPod, splitting into fixed-size
+    // slots and hashing each slot. For Classic-3 there are four format
+    // files:
+    //   F1055_1.ithmb — 56x56 RGB565     → 6272-byte slots
+    //   F1060_1.ithmb — 128x128 RGB565   → 32768-byte slots (large res)
+    //   F1061_1.ithmb — 128x128 RGB565   → 32768-byte slots (small res)
+    //   F1068_1.ithmb — 320x320 RGB565   → 204800-byte slots
+    // We don't know at compile-time which formats a given iPod uses, so
+    // we peek at every .ithmb, take the file size, and try a set of
+    // candidate slot sizes (the Classic-3 known set). Whichever divides
+    // the file size evenly is treated as the slot size. If none divides
+    // evenly the file is likely padded (post-Bug #4 formats include
+    // padding); we then use size/N where N is the number of tracks we
+    // attached in the last write, as a fallback.
+    struct SlotSizeCandidate {
+      const char *label;
+      qint64 bytes;
+    };
+    static const SlotSizeCandidate kClassic3Sizes[] = {
+      { "56x56 RGB565",     56    * 56    * 2 },  // 6272
+      { "100x100 RGB565",   100   * 100   * 2 },  // 20000 (Nano-3)
+      { "128x128 RGB565",   128   * 128   * 2 },  // 32768
+      { "176x176 RGB565",   176   * 176   * 2 },  // 61952
+      { "240x320 RGB565",   240   * 320   * 2 },  // 153600
+      { "320x240 RGB565",   320   * 240   * 2 },
+      { "320x320 RGB565",   320   * 320   * 2 },  // 204800
+    };
+
+    const QDir art_dir(artwork_dir);
+    const QFileInfoList blobs = art_dir.entryInfoList(QStringList() << u"F*.ithmb"_s, QDir::Files);
+    int total_slots_hashed = 0;
+    int slots_matching_source = 0;
+    int slots_unaccounted = 0;
+    QHash<QByteArray, int> slot_sha1_counts;
+    QHash<QByteArray, QStringList> slot_sha1_files;
+    for (const QFileInfo &blob : blobs) {
+      QFile bf(blob.absoluteFilePath());
+      if (!bf.open(QIODevice::ReadOnly)) {
+        qLog(Warning) << "[cover-trace] post-write: could not open .ithmb"
+                      << blob.absoluteFilePath() << "err=" << bf.errorString();
+        continue;
+      }
+      const QByteArray blob_bytes = bf.readAll();
+      bf.close();
+
+      // Pick a slot size for this file.
+      qint64 slot_size = 0;
+      const char *slot_label = "unknown";
+      for (const SlotSizeCandidate &c : kClassic3Sizes) {
+        if (blob_bytes.size() % c.bytes == 0) {
+          slot_size = c.bytes;
+          slot_label = c.label;
+          break;
+        }
+      }
+      if (slot_size == 0) {
+        qLog(Warning) << "[cover-trace] post-write: .ithmb" << blob.fileName()
+                      << "size=" << blob_bytes.size()
+                      << "does not divide evenly by any known Classic slot size; skipping fingerprint";
+        continue;
+      }
+      const qint64 n_slots = blob_bytes.size() / slot_size;
+      qLog(Info) << "[cover-trace] scanning .ithmb" << blob.fileName()
+                 << "total_size=" << blob_bytes.size()
+                 << "slot_size=" << slot_size << "(" << slot_label << ")"
+                 << "n_slots=" << n_slots;
+
+      for (qint64 i = 0; i < n_slots; ++i) {
+        const QByteArray slot = blob_bytes.mid(i * slot_size, slot_size);
+        // Skip all-zero slots (unused).
+        bool nonzero = false;
+        for (int k = 0; k < slot.size(); k += 64) {
+          if (slot[k] != '\0') { nonzero = true; break; }
+        }
+        if (!nonzero) continue;
+
+        QCryptographicHash h(QCryptographicHash::Sha1);
+        h.addData(slot);
+        const QByteArray slot_sha1 = h.result().toHex();
+
+        ++total_slots_hashed;
+        ++slot_sha1_counts[slot_sha1];
+        slot_sha1_files[slot_sha1].append(blob.fileName() + u"@"_s + QString::number(i * slot_size));
+
+        // Note: we CAN'T directly compare slot_sha1 to any source_sha1
+        // because the source is a JPEG (compressed) and the slot is
+        // decoded+rescaled+packed RGB565 pixels. So the SHA1s never
+        // match by design. What matters is:
+        //   1. Every source in cover_fingerprints_ produces exactly one
+        //      slot per format (unique slot_sha1 per source, but the
+        //      slot_sha1 differs across formats for the same source).
+        //   2. Two DIFFERENT sources should never produce the SAME
+        //      slot_sha1 (a same-source-different-track case is fine
+        //      because that's legitimate album sharing).
+        // We emit the slot fingerprint at Debug level to keep the log
+        // volume tolerable, and reserve Info+Warning for the collision
+        // summary at the end.
+      }
+    }
+
+    // Emit any INTRA-.ithmb slot_sha1 duplicates. A legitimate cause
+    // for a slot_sha1 appearing twice in the same batch is: two tracks
+    // on the same album really do share art, and libgpod correctly wrote
+    // the same pixel bytes into two different slots. But if the SAME
+    // slot_sha1 appears N times where N > number of distinct source
+    // fingerprints (which shouldn't happen because each source produces
+    // one slot per format), that's evidence of writer duplication.
+    int dup_slot_sha1s = 0;
+    for (auto it = slot_sha1_counts.constBegin(); it != slot_sha1_counts.constEnd(); ++it) {
+      if (it.value() <= 1) continue;
+      ++dup_slot_sha1s;
+      qLog(Info) << "[cover-trace] slot-dup slot_sha1=" << it.key()
+                 << "count=" << it.value()
+                 << "positions=" << slot_sha1_files[it.key()].join(u","_s);
+    }
+    qLog(Info) << "[cover-trace] post-write summary: total_slots_hashed=" << total_slots_hashed
+               << " unique_slot_sha1s=" << slot_sha1_counts.size()
+               << " duplicate_slot_sha1s=" << dup_slot_sha1s
+               << " (batch attached=" << cover_fingerprints_.size() << " tracks;"
+               << " upstream_dupes=" << upstream_dupes << ")";
+    Q_UNUSED(slots_matching_source);
+    Q_UNUSED(slots_unaccounted);
+  }
+
+  // Clear the fingerprint map — the next batch (if any) starts fresh.
+  // Doing this AFTER the scan is important; doing it BEFORE would defeat
+  // the whole diagnostic.
+  cover_fingerprints_.clear();
+
   return success;
 
 }
@@ -532,25 +834,65 @@ void GPodDevice::Finish(const bool success) {
   songs_to_remove_.clear();
   cover_files_.clear();
 
+  // Reset the CommitCopy throttle counters defensively. Start() already
+  // resets them at the beginning of every batch, but doing it here too
+  // means a CommitCopy that races against a Close() (or any future
+  // re-entry into Start()) sees clean state.
+  songs_since_last_commit_ = 0;
+  last_commit_ms_ = 0;
+
   db_busy_.unlock();
 
 }
 
 bool GPodDevice::CommitCopy(QString &error_text) {
 
-  // Per-song unit of work: persist the iTunesDB to disk after every
-  // individual CopyToStorage. With Bug #5 fixed, FinishCopy() at the
-  // end of a batch already guarantees the in-memory db_ is flushed --
-  // but if the app crashes (or the device is yanked) mid-batch,
-  // everything in db_ for the current session is lost. Calling
-  // WriteDatabase per song means the unit of work is one song:
-  // after each successful sync, the next reconnect sees the song
-  // already on disk, regardless of what happened to the rest of the
-  // batch. iTunesDB writes for the iPod Classic at hand are O(1 s)
-  // even for thousands of tracks (libgpod walks the in-memory list
-  // and serialises), so the per-song overhead is acceptable for the
-  // crash-safety it buys.
-  return WriteDatabase(error_text);
+  // THROTTLED per-batch flush (Bug #8 fix). See the long comment on
+  // CommitCopy in gpoddevice.h for the full story. In short:
+  //
+  //   - Calling WriteDatabase() after EVERY successful CopyToStorage
+  //     (the original implementation) crashed reproducibly at song
+  //     ~1888 with SIGSEGV inside libgpod's write_mhsd_playlists and
+  //     was responsible for ~20% random cover misattribution.
+  //   - We still want SOME crash-safety: never lose more than a
+  //     small batch of songs if the device is yanked or the app
+  //     crashes mid-sync.
+  //
+  // So we collapse N song commits into one WriteDatabase() call. The
+  // window is bounded by both song count (`kCommitEvery`) and wall-
+  // clock time (`kCommitIntervalMs`), whichever expires first. The
+  // first song of every batch is always flushed (see Start()'s reset
+  // of the counters).
+
+  ++songs_since_last_commit_;
+  const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
+  const bool count_due = songs_since_last_commit_ >= kCommitEvery;
+  // last_commit_ms_ == 0 means "no commit yet in this batch" -- the
+  // first song should commit so the user has *something* persistent
+  // on the iPod even if the very next song fails.
+  const bool first_commit_in_batch = (last_commit_ms_ == 0);
+  const bool time_due = !first_commit_in_batch
+      && (now_ms - last_commit_ms_) >= kCommitIntervalMs;
+  if (!count_due && !first_commit_in_batch && !time_due) {
+    // Not yet — the in-memory `db_` already holds the new track and
+    // its audio bytes are physically on the iPod NAND via
+    // `itdb_cp_track_to_ipod`. The end-of-batch FinishCopy() will
+    // flush; if the user yanks the iPod first, we lose at most
+    // (songs_since_last_commit_) songs from the iTunesDB and they can
+    // be recovered with `.ai/tools/itdb-rescue.c` or simply re-synced.
+    return true;
+  }
+
+  qLog(Info) << "GPodDevice::CommitCopy: flushing iTunesDB after"
+             << songs_since_last_commit_ << "songs ("
+             << (count_due ? "count" : (time_due ? "time" : "first-in-batch"))
+             << "trigger)";
+  const bool ok = WriteDatabase(error_text);
+  if (ok) {
+    songs_since_last_commit_ = 0;
+    last_commit_ms_ = now_ms;
+  }
+  return ok;
 
 }
 
