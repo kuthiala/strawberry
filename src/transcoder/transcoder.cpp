@@ -320,22 +320,55 @@ QString Transcoder::GetFile(const QString &input, const TranscoderPreset &preset
     fileinfo_output.setFile(temp_dir + QLatin1Char('/') + filename);
   }
 
-  // Never overwrite existing files
-  if (fileinfo_output.exists()) {
-    QString path = fileinfo_output.path();
-    QString filename = fileinfo_output.completeBaseName();
-    QString suffix = fileinfo_output.suffix();
-    for (int i = 0; i < 1000000; ++i) {
-      QString new_filename = QStringLiteral("%1/%2-%3.%4").arg(path, filename).arg(i).arg(suffix);
-      fileinfo_output.setFile(new_filename);
-      if (!fileinfo_output.exists()) {
-        break;
-      }
-
+  // Bug #13 (see .ai/10-ipod-sync.md §10.16): The candidate output path
+  // must be unique against BOTH:
+  //   (a) what already exists on disk, AND
+  //   (b) what a previous, still-in-flight GetFile() has already handed
+  //       out but whose gstreamer filesink has not yet opened the file.
+  //
+  // Missing (b) is what caused a sync of Yellowcard's "Ocean Avenue"
+  // (studio) and "Ocean Avenue- Acoustic" (acoustic) — same track
+  // filenames in two different folders — to stall forever after N-1
+  // songs of the acoustic album. Both GetFile calls happened inside a
+  // single Organize::ProcessSomeFiles batch (kBatchSize=10) before
+  // either filesink had created its output on disk; both got the same
+  // path back; both transcodes raced to write it; the first task that
+  // copied to the iPod QFile::remove'd the file, and the second task's
+  // retry loop then hit "No such file or directory" until it hit the
+  // 300 s × 10 retry cap.
+  //
+  // Loop invariant below: on every iteration, fileinfo_output points at
+  // a candidate path we haven't accepted yet. We accept iff the file
+  // does NOT exist on disk AND is NOT in `reserved_outputs_`. If either
+  // check fails, we suffix the basename with an ever-increasing "-N" and
+  // try again.
+  const QString base_dir = fileinfo_output.path();
+  const QString base_name = fileinfo_output.completeBaseName();
+  const QString base_suffix = fileinfo_output.suffix();
+  int collision_suffix = 0;
+  while (fileinfo_output.exists() || reserved_outputs_.contains(fileinfo_output.filePath())) {
+    QString new_filename = QStringLiteral("%1/%2-%3.%4")
+        .arg(base_dir, base_name).arg(collision_suffix).arg(base_suffix);
+    fileinfo_output.setFile(new_filename);
+    if (++collision_suffix > 1000000) {
+      qLog(Error) << "Transcoder::GetFile: could not find a free output name for" << input
+                  << "after 1,000,000 suffix attempts — transcoder cache is likely full of stale files";
+      break;
     }
   }
 
-  return fileinfo_output.filePath();
+  const QString chosen = fileinfo_output.filePath();
+  reserved_outputs_.insert(chosen);
+  return chosen;
+
+}
+
+void Transcoder::ReleaseOutput(const QString &path) {
+
+  // Silently no-op if the path isn't reserved. Callers (Organize) may
+  // release-then-remove multiple times through the retry lifecycle, and
+  // we want that to be idempotent rather than an error case.
+  reserved_outputs_.remove(path);
 
 }
 
@@ -375,6 +408,13 @@ Transcoder::StartJobStatus Transcoder::MaybeStartNextJob() {
   if (StartJob(job)) {
     return StartJobStatus::StartedSuccessfully;
   }
+
+  // Failed to spin up the pipeline for this job. Release its reserved
+  // output path so a subsequent GetFile() for the same basename can
+  // reuse it (Bug #13). The JobComplete emission below still tells
+  // Organize the job is dead so the task can be routed to
+  // files_with_errors_.
+  reserved_outputs_.remove(job.output);
 
   Q_EMIT JobComplete(job.input, job.output, false);
   return StartJobStatus::FailedToStart;
@@ -551,6 +591,18 @@ bool Transcoder::event(QEvent *e) {
     // Remove it from the list - this will also destroy the GStreamer pipeline
     current_jobs_.erase(it);
 
+    // Bug #13 (see .ai/10-ipod-sync.md §10.16): Now that the transcode
+    // is finished, the output file (if the job succeeded) is on disk,
+    // so any subsequent GetFile() will see it via `QFileInfo::exists()`
+    // and pick a different name. If the job failed, the file may or may
+    // not exist — either way we release the reservation so the name is
+    // free for reuse. Organize is expected to handle either case
+    // gracefully (on success: copy → QFile::remove → ReleaseOutput;
+    // on failure: task ends up in files_with_errors_ and the transcoded
+    // filename is either non-existent or a truncated partial output
+    // that ReleaseOutput frees).
+    reserved_outputs_.remove(output);
+
     // Emit the finished signal
     Q_EMIT JobComplete(input, output, finished_event->success_);
 
@@ -565,6 +617,13 @@ bool Transcoder::event(QEvent *e) {
 }
 
 void Transcoder::Cancel() {
+
+  // Bug #13: Free all pending reservations. Any GetFile() reservations
+  // still pending — whether the associated job was queued, running, or
+  // in some transient state — are now moot because Cancel() tears down
+  // the entire batch. Clearing here means a fresh sync started after a
+  // Cancel doesn't inherit ghost reservations.
+  reserved_outputs_.clear();
 
   // Remove all pending jobs
   queued_jobs_.clear();

@@ -201,11 +201,22 @@ void Organize::ProcessSomeFiles() {
   }
 
   // We process files in batches so we can be cancelled part-way through.
-  // Retry-aware scheduling: if the head of the queue is not yet eligible to
-  // run (its retry backoff has not elapsed), we leave it in place and wait
-  // for the next timer tick rather than skipping past it. This preserves the
-  // user-facing processing order so the sidebar checklist still ticks off
-  // top-to-bottom.
+  //
+  // Retry-aware scheduling: previously we only inspected the head of the
+  // queue and, if it wasn't due yet, we broke out and waited. That was
+  // fine when retries were rare, but it caused a HARD stall when even one
+  // song entered the extended-backoff regime — e.g. Bug #13's transcoder
+  // filename collision put "05 Life of a Salesman.flac" into a 300 s/
+  // attempt backoff loop with 9 attempts, blocking every other queued
+  // song for ~13 minutes before the user gave up and killed the app.
+  //
+  // Fix: scan through the queue and pick the FIRST task whose
+  // next_attempt_at_ms_ has elapsed. Skip past not-yet-due retries — they
+  // remain in place with their backoff timer intact, and the earliest one
+  // controls the timer re-arm below. Ordering guarantee is now
+  // "top-eligible-first" rather than strictly "top-first", which lets the
+  // sidebar keep progressing while a stuck song is cooling down.
+  // See `.ai/10-ipod-sync.md §10.16` for full context.
   const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
   qint64 earliest_due_ms = 0;
   for (int i = 0; i < kBatchSize; ++i) {
@@ -213,14 +224,25 @@ void Organize::ProcessSomeFiles() {
 
     if (tasks_pending_.isEmpty()) break;
 
-    // If the next task isn't due yet, stop the batch and re-arm the timer so
-    // we wake up exactly when it becomes due.
-    if (tasks_pending_.first().next_attempt_at_ms_ > now_ms) {
-      earliest_due_ms = tasks_pending_.first().next_attempt_at_ms_;
-      break;
+    // Scan for the first eligible task. Not-yet-due tasks contribute to
+    // earliest_due_ms so the timer re-arm below wakes us exactly when
+    // the earliest retry becomes ready. If ALL tasks are cooling down
+    // this scan sets earliest_due_ms and leaves due_idx as -1, which
+    // breaks the batch loop cleanly.
+    int due_idx = -1;
+    for (int j = 0; j < tasks_pending_.size(); ++j) {
+      const qint64 next = tasks_pending_[j].next_attempt_at_ms_;
+      if (next <= now_ms) {
+        due_idx = j;
+        break;
+      }
+      if (earliest_due_ms == 0 || next < earliest_due_ms) {
+        earliest_due_ms = next;
+      }
     }
+    if (due_idx < 0) break;
 
-    Task task = tasks_pending_.takeFirst();
+    Task task = tasks_pending_.takeAt(due_idx);
     if (task.attempts_ > 0) {
       qLog(Info) << "Retrying" << task.song_info_.song_.url().toLocalFile()
                  << "(attempt" << (task.attempts_ + 1) << "of" << kMaxAttempts << ")";
@@ -395,9 +417,15 @@ void Organize::ProcessSomeFiles() {
       }
       Q_EMIT SongSyncProgress(task.song_info_.song_, true);
 
-      // Clean up the temporary transcoded file
+      // Clean up the temporary transcoded file and free its Transcoder
+      // reservation (Bug #13, see `.ai/10-ipod-sync.md §10.16`) so a
+      // subsequent song with the same basename can safely reuse the
+      // name. Order matters: remove the file FIRST so ReleaseOutput's
+      // successor GetFile call sees the free name via the disk check
+      // and doesn't have to fall back to a "-N" suffix.
       if (!task.transcoded_filename_.isEmpty()) {
         QFile::remove(task.transcoded_filename_);
+        transcoder_->ReleaseOutput(task.transcoded_filename_);
       }
 
       tasks_complete_++;
@@ -452,9 +480,14 @@ void Organize::ProcessSomeFiles() {
       }
       Q_EMIT SongSyncProgress(task.song_info_.song_, false);
 
-      // Clean up the temporary transcoded file
+      // Clean up the temporary transcoded file and free its Transcoder
+      // reservation (Bug #13). Same rationale as the success branch
+      // above: the reservation would otherwise leak until the sync ends,
+      // blocking other same-basename songs from ever getting a clean
+      // path.
       if (!task.transcoded_filename_.isEmpty()) {
         QFile::remove(task.transcoded_filename_);
+        transcoder_->ReleaseOutput(task.transcoded_filename_);
       }
 
       tasks_complete_++;
@@ -463,12 +496,41 @@ void Organize::ProcessSomeFiles() {
   SetSongProgress(0);
 
   if (!process_files_timer_->isActive()) {
-    // If we know exactly when the next retry becomes due, sleep until then
-    // (capped to at least the default 100 ms tick) instead of busy-polling.
-    if (earliest_due_ms > 0) {
-      const qint64 wait_ms = qMax<qint64>(100, earliest_due_ms - QDateTime::currentMSecsSinceEpoch());
-      // Cap at kMaxBackoffMs to avoid scheduling a single Qt timer with an
-      // unreasonably large interval (Qt clamps to int32 ms anyway).
+    // After the batch, decide when to fire next. Three cases:
+    //
+    // 1. There are still eligible (non-cooldown) tasks in the queue that
+    //    we didn't get to (batch cap hit OR a failure broke us out
+    //    early). Fire on the default fast tick — those tasks are ready
+    //    right now and should not wait behind a cooling-down retry.
+    //
+    // 2. All remaining tasks are in retry-cooldown. Fire at the earliest
+    //    cooldown expiry (bounded below by 100 ms to avoid a busy loop
+    //    and above by kMaxBackoffMs because Qt's int32 timer clamps
+    //    beyond that).
+    //
+    // 3. The queue is empty. Fall through to the default tick — the
+    //    next event will land on the "None left?" branch at the top of
+    //    ProcessSomeFiles and finalize the batch.
+    //
+    // The scan is O(N) worst-case per batch, but N is bounded by the
+    // caller's queue size (max ~thousands) and the per-tick fixed cost
+    // is dominated by the actual disk / device I/O in the batch itself.
+    // See `.ai/10-ipod-sync.md §10.16` — the failure mode this closes
+    // is a 300 s stall of the entire sync behind one bad song.
+    const qint64 now_after_batch = QDateTime::currentMSecsSinceEpoch();
+    bool have_more_eligible = false;
+    for (const Task &t : std::as_const(tasks_pending_)) {
+      if (t.next_attempt_at_ms_ <= now_after_batch) {
+        have_more_eligible = true;
+        break;
+      }
+    }
+
+    if (have_more_eligible) {
+      process_files_timer_->start();
+    }
+    else if (earliest_due_ms > 0) {
+      const qint64 wait_ms = qMax<qint64>(100, earliest_due_ms - now_after_batch);
       process_files_timer_->start(static_cast<int>(qMin<qint64>(wait_ms, kMaxBackoffMs)));
     }
     else {

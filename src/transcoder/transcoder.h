@@ -64,8 +64,30 @@ class Transcoder : public QObject {
   int max_threads() const { return max_threads_; }
   void set_max_threads(int count) { max_threads_ = count; }
 
-  static QString GetFile(const QString &input, const TranscoderPreset &preset, const QString &output = QString());
+  // Return a unique output path for the requested (input, preset). The
+  // returned path is *reserved* until the corresponding job completes,
+  // so two concurrent GetFile() calls with the same basename cannot
+  // return the same path even before either transcoder's filesink has
+  // opened the file on disk. See Bug #13 in `.ai/10-ipod-sync.md §10.16`.
+  //
+  // Note: previously a static method. Now non-static because it touches
+  // per-instance `reserved_outputs_`. Callers already invoke it through
+  // an instance pointer (see `src/organize/organize.cpp`), so this is
+  // source-compatible.
+  QString GetFile(const QString &input, const TranscoderPreset &preset, const QString &output = QString());
   void AddJob(const QString &input, const TranscoderPreset &preset, const QString &output);
+
+  // Release a reservation obtained from GetFile(). Called by the owner
+  // (Organize) after it has finished with the transcoded file — i.e. after
+  // successful copy OR after all retries have been exhausted, in both
+  // cases AFTER `QFile::remove(path)` has run. Safe to call for a path
+  // that isn't in the reservation set (no-op).
+  //
+  // Reservations are also released automatically when a job finishes
+  // (see `event()`), so callers that don't need the extra protection
+  // window between "transcode complete" and "copy complete" can omit
+  // this call. Doing both is safe.
+  void ReleaseOutput(const QString &path);
 
   QMap<QString, float> GetProgress() const;
   qint64 QueuedJobsCount() const { return queued_jobs_.count(); }
@@ -148,6 +170,22 @@ class Transcoder : public QObject {
   QList<Job> queued_jobs_;
   JobStateList current_jobs_;
   QString settings_postfix_;
+
+  // Set of output paths that GetFile() has returned but whose transcode
+  // has not yet completed. Used to avoid two GetFile() calls handing back
+  // the same path before either job's filesink has actually created a
+  // file on disk (see Bug #13 / `.ai/10-ipod-sync.md §10.16`).
+  //
+  // Populated by GetFile(), drained by event() when a JobFinishedEvent
+  // fires (and by ReleaseOutput() for the extra protection window between
+  // transcode-complete and copy-complete). Cancel() clears the whole set.
+  //
+  // No mutex needed: the Transcoder is a QObject and all methods that
+  // touch this set (GetFile, ReleaseOutput, event(), Cancel) run on the
+  // same thread as the Organize instance that owns the Transcoder
+  // (Transcoder is created with Organize as parent; QObject::moveToThread
+  // moves both together).
+  QSet<QString> reserved_outputs_;
 };
 
 #endif  // TRANSCODER_H
