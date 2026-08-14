@@ -383,6 +383,7 @@ that path is not automated in this repo.
 | `bundle` log contains `ERROR: "fatal error: install_name_tool: cannot rename .../libgstXXX.dylib to .../libgstXXX.dylib.YYYYYY (No such file or directory)"` | Known race: the script invokes `macdeployqt` twice concurrently (main pass + `-executable=gst-plugin-scanner` recursive pass). Both processes try to mutate the same plugin's load commands at the same time; one loses. The losing pass's edits are lost on whichever files it touched last. **As of the current script `cmd_bundle` now detects residual `/opt/...` references after `macdeployqt` exits and auto-runs `install_name_tool -change` + ad-hoc resign on each surviving file, then re-audits.** You'll still see the `ERROR: cannot rename ...` lines in the bundle log because they come from `macdeployqt`'s own stderr; what's changed is the script no longer trusts them silently — look for `Repairing residual /opt references in-place` in the script output. | Nothing — the auto-repair runs unconditionally. If you see `Refusing to mark bundle self-contained` (the post-repair audit still found dirty files), re-run `./install-macos.sh bundle`. If two runs in a row both fail, manually patch the one file: `install_name_tool -change /opt/strawberry_macos_x86_64_release/lib/<libname> @loader_path/../../Frameworks/<libname> <plugin-path>` then `codesign --force --sign - <plugin-path>`. |
 | You ran `./install-macos.sh clean && ./install-macos.sh all` and the app *still* crashes on launch | `all` runs `bundle` as part of its sequence, so this should be impossible — unless `bundle` errored out and the script kept going. | `cat /tmp/sb-bundle.log 2>/dev/null \| grep -iE '^error\|^fatal' \| head -20`. If that's empty, retry; if not, run `bundle` standalone and read the failure. |
 | Runtime behavior reflects the *old* version of a dependency you've already rebuilt and dropped into `${DEPS_PREFIX}/lib/` (e.g. you patched libgpod for the `pack_RGB_565` overflow-guard bug, rebuilt + installed it under `/opt/...`, but the iPod sync still emits `pack_RGB_565: assertion 'dest_width < (gint)G_MAXUINT/2' failed` and produces an `ArtworkDB` with no matching `.ithmb` files) | **Stale bundled library shadowing the rebuilt source.** `macdeployqt` only copies a dylib into the bundle if no file of that name is already there — it never compares timestamps or hashes — so once a lib is in `Contents/Frameworks/`, subsequent rebuilds of the corresponding `${DEPS_PREFIX}/lib/<x>.dylib` get silently shadowed. **As of the current script `cmd_bundle` and `cmd_install`'s pre-flight check both run a SHA-256 audit (`bundle_collect_stale`) against every `Contents/Frameworks/*.dylib` and `Contents/PlugIns/*.dylib`, and auto-refresh any whose contents drift from `${DEPS_PREFIX}/lib/...`.** Look for `STALE:` lines and `Refreshing stale bundled libs` in the script output. | **2-second manual repro**: `shasum -a 256 /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib ${DEPS_PREFIX}/lib/libgpod.dylib` — different hashes means stale. **2-second manual fix**: `cp ${DEPS_PREFIX}/lib/libgpod.dylib /Applications/strawberry.app/Contents/Frameworks/`, then for each `/opt/...` line emitted by `otool -L` on the copied file, `install_name_tool -change /opt/.../lib/<libname> @loader_path/<libname> .../Frameworks/libgpod.dylib`, then `codesign --force --sign - .../Frameworks/libgpod.dylib`. Or just `./install-macos.sh install -y` — the safety net catches and repairs this automatically now. |
+| Runtime behavior reflects the *old* version of a dependency you rebuilt **under `.idea/`** (e.g. you patched `.idea/strawberry-libgpod/src/itdb_itunesdb.c`, ran `cmake --build .idea/strawberry-libgpod/build`, saw fresh bytes, ran `./install-macos.sh install`, its audit reported "self-contained", but `strings /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib \| grep <your-new-symbol>` is empty and the runtime still crashes with the pre-patch fingerprint). This is **Bug #12** — related to but distinct from the row above. | **The audit compares the bundle against `${DEPS_PREFIX}/lib/libgpod.dylib`, NOT against `.idea/strawberry-libgpod/build/libgpod.dylib`.** When you rebuild libgpod under `.idea/`, the `/opt/` tree stays stale. The audit sees bundle-matches-opt and marks "self-contained" — both copies are pre-patch. Row 8 above only catches the case where `/opt/` has been refreshed and the bundle hasn't; it can't help when *both* are stale. | **3-step manual fix.** (1) `cp .idea/strawberry-libgpod/build/libgpod.dylib ${DEPS_PREFIX}/lib/libgpod.dylib`. (2) `cp .idea/strawberry-libgpod/build/libgpod.dylib /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib`. (3) `for DEP in $(otool -L /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib \| awk '/\/opt\/strawberry_macos/{print $1}'); do install_name_tool -change "$DEP" "@loader_path/$(basename "$DEP")" /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib; done && install_name_tool -id "@rpath/libgpod.dylib" /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib && codesign --force --sign - /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib`. Verify with `strings /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib \| grep <your-new-symbol>`. Full deployment gotcha writeup at [`10-ipod-sync.md §10.14`](./10-ipod-sync.md#1014-bug-11-mach_vm_allocate_kernel-failed-at-1886-songs--unchecked-g_realloc-in-libgpod) ("Deployment gotcha (Bug #12)"). **TODO for install-macos.sh:** extend `bundle_collect_stale` to also compare `${DEPS_PREFIX}/lib/libgpod.dylib` against `.idea/strawberry-libgpod/build/libgpod.dylib` and auto-refresh the `/opt/` copy from the `.idea/` build when newer. |
 
 ---
 
@@ -497,3 +498,154 @@ only then** start considering other causes:
 - **Don't** skip `bundle` because you "only changed one line of C++". If
   you `clean`ed or first-built, the resulting `.app` has dev-time load
   paths regardless of how trivial the source delta is.
+
+---
+
+## 11.16 Crash Logs
+
+If Strawberry crashes (or is killed by a signal Strawberry didn't catch),
+two artefacts get written to disk. Both should be consulted; they
+complement rather than replace each other.
+
+### 1. Strawberry-side crash log (small, human-readable)
+
+Written by [`src/core/crashreporter.cpp`](../src/core/crashreporter.cpp).
+Path:
+
+```
+~/Library/Logs/Strawberry/strawberry-crash-<ISO-datetime>-<pid>.log
+```
+
+— same directory as the regular Strawberry stdout log
+(`strawberry-stdout.txt`), so a one-shot `ls -lat ~/Library/Logs/Strawberry/`
+shows them interleaved with the run that produced them.
+
+Contents are deliberately small (a few KB):
+
+```
+================ Strawberry crash log ================
+Strawberry version: 1.2.20-18-g25d5bf97
+Process ID: 12345
+Epoch: 1719789308
+Signal: SIGSEGV (segmentation fault)
+--- Backtrace ---
+0   strawberry  0x107a28000 _ZN10GPodDevice13WriteDatabaseER7QString + 1465
+1   strawberry  0x107a28000 _ZN8Organize16ProcessSomeFilesEv + 9653
+2   strawberry  0x107a28000 _Z11doActivateILb0EEvP7QObjectiPPv + 1533
+…
+--- End of crash log; re-raising signal so the OS can take its own snapshot. ---
+```
+
+The backtrace is from `backtrace_symbols_fd(3)` — function names are
+mangled (use `c++filt` if needed) and offsets are within the strawberry
+binary's `__TEXT` segment. For the iPod sync example above the mangled
+`_ZN10GPodDevice13WriteDatabaseER7QString` translates to
+`GPodDevice::WriteDatabase(QString&)` and is the immediate caller of the
+crash.
+
+For non-fatal but interesting Strawberry-level failures, code can call
+`CrashReporter::WriteSyntheticCrashLog(QStringLiteral("reason"))` to drop
+an entry in the same directory without actually terminating the process.
+
+### 2. macOS-native crash report (large, authoritative)
+
+Written by macOS's `ReportCrash` daemon. Path (one file per crash,
+filename = `strawberry-<YYYY-MM-DD>-<HHMMSS>.ips`):
+
+```
+~/Library/Logs/DiagnosticReports/
+```
+
+These are gzipped-JSON-on-the-second-line:
+
+```bash
+LATEST=$(ls -t ~/Library/Logs/DiagnosticReports/strawberry-*.ips | head -1)
+# Top-level metadata is on line 1; JSON payload on line 2 onwards.
+{ head -1 "$LATEST"; tail -n +2 "$LATEST" | python3 -m json.tool; } | less
+```
+
+Useful one-liner to extract just the faulting thread's backtrace:
+
+```bash
+python3 -c "
+import sys, json
+raw = open(sys.argv[1]).read().split('\n', 1)
+d = json.loads(raw[1])
+t = next(x for x in d['threads'] if x.get('triggered'))
+print('Signal:', d['exception']['signal'], '   Subtype:', d['exception']['subtype'])
+print('ktriageinfo:', d.get('ktriageinfo', '').strip())
+print('---')
+for f in t['frames']:
+    print(f.get('symbol', '(no symbol)'),
+          'at offset', f.get('imageOffset', '?'),
+          'in image', f.get('imageIndex', '?'))
+" "$LATEST" | head -30
+```
+
+What the .ips contains that the Strawberry-side log doesn't:
+
+- All threads' backtraces, not just the faulting one — essential when the
+  crash is caused by something on a background thread.
+- Full register state at the moment of the crash.
+- Loaded images with `base` addresses (lets `atos -arch x86_64 -o <binary> -l <base> <addr>` symbolize anything not already symbolized).
+- `vmRegionInfo` (which mapping the bad address fell in — `__TEXT` vs
+  heap vs guard page).
+- `ktriageinfo` — Mach-level hints. For Bug #8 this said
+  `mach_vm_allocate_kernel failed within call to vm_map_enter` ×5,
+  which was the smoking gun that pointed at VM exhaustion as the root
+  cause; without that single line the SIGSEGV at `0xc` would have looked
+  like a generic pointer-chasing bug.
+
+### Which one to look at first
+
+Always look at **both**. The Strawberry-side log is fast to find and
+read (one `cat`), tells you which symbol crashed, and is enough for
+~80% of regressions. The .ips is what you want when the Strawberry-side
+log is *not* enough — i.e. when:
+
+- The crash is on a non-main thread (the Strawberry-side log only
+  captures the thread that received the signal, which is the same thread
+  on macOS but the .ips lets you see all the others' state too).
+- You suspect a memory-pressure / OOM / VM-exhaustion failure mode (the
+  Strawberry-side log doesn't include `ktriageinfo`).
+- You need to symbolize against a stripped binary (use `atos` with the
+  image bases from `usedImages` in the .ips).
+- The user reported the crash but couldn't email the Strawberry-side log
+  because they uninstalled before sending diagnostics (the .ips persists
+  through uninstall).
+
+### Worked example: Bug #8 / Bug #9 (per-song `WriteDatabase` crash)
+
+See [`10-ipod-sync.md §10.12`](./10-ipod-sync.md#1012-bug-8--bug-9-per-song-writedatabase-crashed-at-1888-songs-and-scrambled-cover-art)
+for the full story. The .ips diagnosis path was:
+
+1. `cat $(ls -t ~/Library/Logs/DiagnosticReports/strawberry-*.ips | head -1)`
+2. Read `triggered` thread's frames: top symbol is `write_mhsd_playlists`
+   inside libgpod, called from `GPodDevice::WriteDatabase` called from
+   `Organize::ProcessSomeFiles`.
+3. Read `exception.subtype`: `KERN_INVALID_ADDRESS at 0x000000000000000c`
+   (offset 12 from a NULL pointer — struct field deref).
+4. Read `ktriageinfo`:
+   `VM - (arg = 0x3) mach_vm_allocate_kernel failed within call to vm_map_enter`
+   repeated 5×.
+5. Conclusion: VM exhaustion in libgpod after too many `itdb_write`
+   calls. That's not visible from the symbol name alone — the
+   `ktriageinfo` line is what closes the case.
+
+### Disable / re-enable the per-strawberry log
+
+The signal handler installs unconditionally in `main()` after
+`logging::Init()`. To disable (e.g. you're running under `lldb` and want
+the debugger to catch SIGSEGV first), stop the handler from running by
+launching with `STRAWBERRY_DISABLE_CRASHLOG=1` set:
+
+```bash
+# (NOT YET IMPLEMENTED — TODO if developer demand appears.)
+# For now, comment out the CrashReporter::Init() call in src/main.cpp
+# for your local dev build.
+```
+
+The handler chains to the default disposition after writing its log, so
+even with the handler installed `lldb` still stops at the faulting
+instruction *after* the log is written — there's normally no reason to
+disable it.
