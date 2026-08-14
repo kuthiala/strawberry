@@ -67,6 +67,12 @@
 #include "deviceproperties.h"
 #include "deviceview.h"
 
+#ifdef HAVE_GPOD
+#  include "gpoddevice.h"
+#  include "gpodplaylistmanager.h"
+#  include "gpodplaylistsdialog.h"
+#endif
+
 using namespace Qt::Literals::StringLiterals;
 using std::make_unique;
 
@@ -182,6 +188,9 @@ DeviceView::DeviceView(QWidget *parent)
       eject_action_(nullptr),
       forget_action_(nullptr),
       properties_action_(nullptr),
+#ifdef HAVE_GPOD
+      ipod_playlists_action_(nullptr),
+#endif
       collection_menu_(nullptr),
       load_action_(nullptr),
       add_to_playlist_action_(nullptr),
@@ -243,6 +252,9 @@ void DeviceView::contextMenuEvent(QContextMenuEvent *e) {
     forget_action_ = device_menu_->addAction(IconLoader::Load(u"list-remove"_s), tr("Forget device"), this, &DeviceView::Forget);
     device_menu_->addSeparator();
     properties_action_ = device_menu_->addAction(IconLoader::Load(u"configure"_s), tr("Device properties..."), this, &DeviceView::Properties);
+#ifdef HAVE_GPOD
+    ipod_playlists_action_ = device_menu_->addAction(IconLoader::Load(u"view-media-playlist"_s), tr("Manage iPod playlists..."), this, &DeviceView::ShowIPodPlaylists);
+#endif
 
     // Collection menu
     add_to_playlist_action_ = collection_menu_->addAction(IconLoader::Load(u"media-playback-start"_s), tr("Append to current playlist"), this, &DeviceView::AddToPlaylist);
@@ -265,6 +277,19 @@ void DeviceView::contextMenuEvent(QContextMenuEvent *e) {
 
     forget_action_->setEnabled(is_remembered);
     eject_action_->setEnabled(is_plugged_in);
+
+#ifdef HAVE_GPOD
+    // "Manage iPod playlists…" is only meaningful for a currently-connected
+    // GPodDevice. Hide it for other device types + when the iPod is
+    // disconnected (its Itdb_iTunesDB is torn down at that point).
+    bool is_ipod = false;
+    if (is_plugged_in) {
+      SharedPtr<ConnectedDevice> device = device_manager_->GetConnectedDevice(device_index);
+      if (device && qobject_cast<GPodDevice*>(&*device)) is_ipod = true;
+    }
+    ipod_playlists_action_->setVisible(is_ipod);
+    ipod_playlists_action_->setEnabled(is_ipod);
+#endif
 
     device_menu_->popup(e->globalPos());
   }
@@ -363,6 +388,28 @@ void DeviceView::Forget() {
 void DeviceView::Properties() {
   properties_dialog_->ShowDevice(MapToDevice(menu_index_));
 }
+
+#ifdef HAVE_GPOD
+void DeviceView::ShowIPodPlaylists() {
+
+  const QModelIndex device_index = MapToDevice(menu_index_);
+  if (!device_index.isValid()) return;
+  SharedPtr<ConnectedDevice> device = device_manager_->GetConnectedDevice(device_index);
+  if (!device) return;
+  GPodDevice *gpod = qobject_cast<GPodDevice*>(&*device);
+  if (!gpod) return;
+  GPodPlaylistManager *mgr = gpod->PlaylistManager();
+  if (!mgr) {
+    QMessageBox::information(this, tr("iPod Playlists"),
+        tr("The iPod database is not loaded yet. Please wait for the device to finish connecting."));
+    return;
+  }
+  auto *dlg = new GPodPlaylistsDialog(gpod, mgr, this);
+  dlg->setAttribute(Qt::WA_DeleteOnClose);
+  dlg->show();
+
+}
+#endif
 
 void DeviceView::mouseDoubleClickEvent(QMouseEvent *e) {
 

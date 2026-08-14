@@ -50,6 +50,7 @@ class TaskManager;
 class Database;
 class TagReaderClient;
 class AlbumCoverLoader;
+class GPodPlaylistManager;
 
 class GPodDevice : public ConnectedDevice, public virtual MusicStorage {
   Q_OBJECT
@@ -76,6 +77,19 @@ class GPodDevice : public ConnectedDevice, public virtual MusicStorage {
   QObject *Loader() { return loader_; }
 
   static QStringList url_schemes() { return QStringList() << QStringLiteral("ipod"); }
+
+  // Playlist editing (see gpodplaylistmanager.h). Returns nullptr until
+  // the loader has produced a db (i.e. IsLoading() has flipped false and
+  // DeviceConnectFinished has fired). Ownership stays with GPodDevice —
+  // the manager is torn down alongside db_ in Finish()/~GPodDevice.
+  GPodPlaylistManager *PlaylistManager() { return playlist_manager_; }
+
+  // Called by GPodPlaylistsDialog::OnSave. Acquires db_busy_ so it can
+  // safely serialise against an in-progress copy/delete batch, then runs
+  // the same throttled WriteDatabase() path used at end-of-sync. Emits
+  // an error string in `error_text` on failure. Safe to call from the
+  // GUI thread.
+  bool WritePlaylistChanges(QString &error_text);
 
   bool GetSupportedFiletypes(QList<Song::FileType> *ret) override;
 
@@ -189,6 +203,11 @@ class GPodDevice : public ConnectedDevice, public virtual MusicStorage {
   // Organize worker thread that owns db_busy_ during a batch.
   int songs_since_last_commit_ = 0;
   qint64 last_commit_ms_ = 0;
+
+  // Owned. Instantiated in LoadFinished() once db_ is non-null; deleted
+  // in Finish()/dtor. Presents playlist-CRUD to the UI without exposing
+  // the raw Itdb_iTunesDB pointer.
+  GPodPlaylistManager *playlist_manager_ = nullptr;
 };
 
 #endif  // GPODDEVICE_H

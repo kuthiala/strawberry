@@ -63,6 +63,7 @@
 #include "connecteddevice.h"
 #include "gpoddevice.h"
 #include "gpodloader.h"
+#include "gpodplaylistmanager.h"
 
 class DeviceLister;
 class DeviceManager;
@@ -228,6 +229,11 @@ GPodDevice::~GPodDevice() {
     loader_thread_ = nullptr;
   }
 
+  if (playlist_manager_) {
+    playlist_manager_->deleteLater();
+    playlist_manager_ = nullptr;
+  }
+
   if (db_) {
     itdb_free(db_);
     db_ = nullptr;
@@ -259,6 +265,19 @@ void GPodDevice::LoadFinished(Itdb_iTunesDB *db, const bool success) {
   QMutexLocker l(&db_mutex_);
   db_ = db;
   db_wait_cond_.wakeAll();
+
+  // Instantiate/refresh the playlist manager so UI code can enumerate
+  // and edit playlists as soon as DeviceConnectFinished fires. The
+  // manager shares db_mutex_ / db_busy_ with the sync path; it never
+  // calls itdb_write() on its own.
+  if (db_) {
+    if (!playlist_manager_) {
+      playlist_manager_ = new GPodPlaylistManager(db_, &db_busy_, this);
+    }
+    else {
+      playlist_manager_->SetDatabase(db_);
+    }
+  }
 
   if (loader_thread_) {
     loader_thread_->quit();
@@ -1010,4 +1029,31 @@ bool GPodDevice::GetSupportedFiletypes(QList<Song::FileType> *ret) {
   *ret << Song::FileType::MPEG;
   *ret << Song::FileType::ALAC;
   return true;
+}
+
+bool GPodDevice::WritePlaylistChanges(QString &error_text) {
+
+  // Called by GPodPlaylistsDialog::OnSave to flush pending playlist
+  // mutations. We acquire db_busy_ to serialise against any in-progress
+  // sync — if an Organize batch is currently running, this blocks until
+  // it releases db_busy_ in Finish(). That's the correct behaviour: a
+  // playlist Save cannot race a sync commit without producing an
+  // inconsistent iTunesDB.
+  //
+  // Once we hold the mutex we reuse the standard WriteDatabase() path
+  // (same pre-write pressure relief, same post-write cover-trace, etc.).
+  // On success, `dirty_` on the playlist manager is left for the caller
+  // to reset (dialog does it after showing the success toast).
+  {
+    QMutexLocker l(&db_mutex_);
+    if (!db_) {
+      error_text = tr("iPod database is not loaded.");
+      return false;
+    }
+  }
+
+  QMutexLocker busy(&db_busy_);
+  const bool ok = WriteDatabase(error_text);
+  return ok;
+
 }

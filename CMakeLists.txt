@@ -1439,9 +1439,13 @@ optional_source(HAVE_GPOD
   SOURCES
     src/device/gpoddevice.cpp
     src/device/gpodloader.cpp
+    src/device/gpodplaylistmanager.cpp
+    src/device/gpodplaylistsdialog.cpp
   HEADERS
     src/device/gpoddevice.h
     src/device/gpodloader.h
+    src/device/gpodplaylistmanager.h
+    src/device/gpodplaylistsdialog.h
 )
 
 optional_source(HAVE_SUBSONIC
