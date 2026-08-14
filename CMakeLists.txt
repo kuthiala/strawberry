@@ -431,6 +431,7 @@ if(WIN32 AND NOT ENABLE_WIN32_CONSOLE)
 endif()
 
 set(SOURCES
+  src/core/crashreporter.cpp
   src/core/logging.cpp
   src/core/mainwindow.cpp
   src/core/application.cpp
@@ -848,6 +849,7 @@ set(SOURCES
 )
 
 set(HEADERS
+  src/core/crashreporter.h
   src/core/logging.h
   src/core/mainwindow.h
   src/core/application.h

@@ -69,6 +69,7 @@
 #include "includes/scoped_ptr.h"
 #include "includes/shared_ptr.h"
 
+#include "core/crashreporter.h"
 #include "core/logging.h"
 #include "core/standardpaths.h"
 #include "core/settings.h"
@@ -155,6 +156,16 @@ int main(int argc, char *argv[]) {
   // Initialize logging.  Log levels are set after the commandline options are parsed below.
   logging::Init();
   g_log_set_default_handler(reinterpret_cast<GLogFunc>(&logging::GLog), nullptr);
+
+  // Install signal handlers that write a brief Strawberry-specific crash
+  // log to `~/Library/Logs/Strawberry/strawberry-crash-<pid>-<epoch>.log`
+  // (macOS) or `<AppLocalData>/crashlogs/...` (Linux/Windows) on
+  // SIGSEGV/SIGABRT/SIGBUS/SIGFPE/SIGILL. This complements (not replaces)
+  // the OS-native crash report (`~/Library/Logs/DiagnosticReports/
+  // strawberry-*.ips` on macOS) — see `.ai/11-macos-dev-loop.md §11.16`
+  // for the full story. Must be called after the org/app names are set
+  // above but before any module initialisation that could itself crash.
+  CrashReporter::Init();
 
   CommandlineOptions options(argc, argv);
   {
