@@ -90,6 +90,9 @@ class DeviceView : public AutoExpandingTreeView {
   void Unmount();
   void Forget();
   void Properties();
+#ifdef HAVE_GPOD
+  void ShowIPodPlaylists();
+#endif
 
   // Collection menu actions
   void Load();
@@ -123,6 +126,9 @@ class DeviceView : public AutoExpandingTreeView {
   QAction *eject_action_;
   QAction *forget_action_;
   QAction *properties_action_;
+#ifdef HAVE_GPOD
+  QAction *ipod_playlists_action_;
+#endif
 
   QMenu *collection_menu_;
   QAction *load_action_;

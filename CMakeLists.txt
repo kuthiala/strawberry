@@ -1598,10 +1598,14 @@ if(HAVE_GPOD)
   list(APPEND SOURCES
     src/device/gpoddevice.cpp
     src/device/gpodloader.cpp
+    src/device/gpodplaylistmanager.cpp
+    src/device/gpodplaylistsdialog.cpp
   )
   list(APPEND HEADERS
     src/device/gpoddevice.h
     src/device/gpodloader.h
+    src/device/gpodplaylistmanager.h
+    src/device/gpodplaylistsdialog.h
   )
 endif()
 
