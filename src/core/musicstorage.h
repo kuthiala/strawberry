@@ -59,14 +59,58 @@ class MusicStorage {
 
   using ProgressFunction = std::function<void (float progress)>;
 
+  // Target media type when copying to an iPod (GPodDevice). Music is the
+  // default and preserves the historical behaviour; Podcast and Audiobook
+  // change how the track is flagged and grouped in the iTunesDB so the iPod
+  // firmware surfaces it under the correct menu. Ignored by non-iPod storages.
+  enum class DeviceMediaType {
+    Music = 0,
+    Podcast = 1,
+    Audiobook = 2,
+  };
+
+  // Show-level podcast metadata gathered from the user (via PodcastDetailsDialog)
+  // and applied to every track in a "Copy as podcast" batch. Unlike music, a
+  // podcast needs a stable feed identity so the iPod firmware groups the
+  // episodes under one browsable show instead of one entry per track.
+  struct PodcastInfo {
+    QString show_title_;   // The podcast show name (becomes album + grouping key).
+    QString author_;       // Author / publisher (becomes artist / albumartist).
+    QString feed_url_;     // Optional RSS/feed URL; used as the grouping identity.
+    QString description_;  // Optional show description.
+  };
+
+  // One chapter marker for an audiobook. start_ms_ is the chapter's start
+  // offset from the beginning of the merged file (milliseconds); title_ is the
+  // chapter label shown on the device. These are written into the iTunesDB
+  // track record via libgpod (itdb_chapterdata_*) so the iPod firmware shows
+  // real chapter navigation -- the in-file QuickTime chapter track that ffmpeg
+  // writes is ignored by the iPod, so this is the only reliable path.
+  struct AudiobookChapter {
+    quint64 start_ms_ = 0;
+    QString title_;
+  };
+  using AudiobookChapterList = QList<AudiobookChapter>;
+
+
   struct CopyJob {
-    CopyJob() : overwrite_(false), remove_original_(false), albumcover_(false) {}
+    CopyJob() : overwrite_(false), remove_original_(false), albumcover_(false), media_type_(DeviceMediaType::Music) {}
     QString source_;
     QString destination_;
     Song metadata_;
     bool overwrite_;
     bool remove_original_;
     bool albumcover_;
+    // iPod media-type routing. For Music this is a no-op (default behaviour).
+    // For Podcast/Audiobook, GPodDevice flags the track accordingly and places
+    // it in the right playlist / menu. Ignored by non-iPod storages.
+    DeviceMediaType media_type_;
+    // Only meaningful when media_type_ == Podcast. Carries the show-level
+    // metadata the user supplied so all episodes group under one show.
+    PodcastInfo podcast_info_;
+    // Only meaningful when media_type_ == Audiobook and the track is a merged
+    // book. When non-empty, GPodDevice attaches these as real iPod chapters.
+    AudiobookChapterList audiobook_chapters_;
     QString cover_source_;
     QString cover_dest_;
     QImage cover_image_;

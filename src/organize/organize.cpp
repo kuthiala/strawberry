@@ -80,7 +80,10 @@ Organize::Organize(const SharedPtr<TaskManager> task_manager,
                    const bool albumcover,
                    const NewSongInfoList &songs_info,
                    const bool eject_after,
+                   const MusicStorage::DeviceMediaType media_type,
+                   const MusicStorage::PodcastInfo &podcast_info,
                    const QString &playlist,
+                   const QMap<QString, MusicStorage::AudiobookChapterList> &audiobook_chapters,
                    QObject *parent)
 
     : QObject(parent),
@@ -95,6 +98,9 @@ Organize::Organize(const SharedPtr<TaskManager> task_manager,
       overwrite_(overwrite),
       albumcover_(albumcover),
       eject_after_(eject_after),
+      media_type_(media_type),
+      podcast_info_(podcast_info),
+      audiobook_chapters_(audiobook_chapters),
       task_count_(static_cast<quint64>(songs_info.count())),
       playlist_(playlist),
       tasks_complete_(0),
@@ -317,6 +323,12 @@ void Organize::ProcessSomeFiles() {
     job.metadata_ = song;
     job.overwrite_ = overwrite_;
     job.albumcover_ = albumcover_;
+    job.media_type_ = media_type_;
+    job.podcast_info_ = podcast_info_;
+    if (!audiobook_chapters_.isEmpty()) {
+      const QString chapters_key = task.song_info_.song_.url().toLocalFile();
+      job.audiobook_chapters_ = audiobook_chapters_.value(chapters_key);
+    }
     job.remove_original_ = !copy_;
     job.playlist_ = playlist_;
 

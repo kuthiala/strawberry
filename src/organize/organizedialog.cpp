@@ -53,6 +53,8 @@
 #include <QToolButton>
 #include <QShowEvent>
 #include <QCloseEvent>
+#include <QMessageBox>
+#include <QProgressDialog>
 #include <QSettings>
 
 #include "includes/shared_ptr.h"
@@ -72,6 +74,9 @@
 #include "organizesyntaxhighlighter.h"
 #include "organizedialog.h"
 #include "organizeerrordialog.h"
+#include "dialogs/podcastdetailsdialog.h"
+#include "device/audiobookmerger.h"
+#include "constants/audiobooksettings.h"
 #include "ui_organizedialog.h"
 #include "transcoder/transcoder.h"
 
@@ -169,6 +174,11 @@ void OrganizeDialog::SetDestinationModel(QAbstractItemModel *model, const bool d
   ui_->destination->setModel(model);
 
   ui_->eject_after->setVisible(devices);
+  ui_->media_type_container->setVisible(devices);
+  if (!devices) {
+    // Non-device destinations are always plain music organizing.
+    ui_->media_type->setCurrentIndex(0);
+  }
 
   devices_ = devices;
 
@@ -202,7 +212,113 @@ void OrganizeDialog::accept() {
 
   // It deletes itself when it's finished.
   const bool copy = ui_->aftercopying->currentIndex() == 0;
-  Organize *organize = new Organize(task_manager_, tagreader_client_, storage, format_, copy, ui_->overwrite->isChecked(), ui_->albumcover->isChecked(), new_songs_info_, ui_->eject_after->isChecked(), playlist_);
+
+  // Determine the target media type for device (iPod) copies. The dropdown is
+  // only visible for device destinations; for everything else it stays on
+  // "Music" so behaviour is unchanged.
+  MusicStorage::DeviceMediaType media_type = MusicStorage::DeviceMediaType::Music;
+  MusicStorage::PodcastInfo podcast_info;
+  if (devices_) {
+    switch (ui_->media_type->currentIndex()) {
+      case 1: media_type = MusicStorage::DeviceMediaType::Podcast; break;
+      case 2: media_type = MusicStorage::DeviceMediaType::Audiobook; break;
+      default: media_type = MusicStorage::DeviceMediaType::Music; break;
+    }
+  }
+
+  // Podcasts need show-level metadata so the iPod firmware groups the episodes
+  // under one browsable show instead of one entry per track. Prompt the user
+  // for it, pre-filling from the common album/albumartist of the selection.
+  if (media_type == MusicStorage::DeviceMediaType::Podcast) {
+    QString common_album, common_author;
+    bool album_common = true, author_common = true;
+    for (const Organize::NewSongInfo &info : new_songs_info_) {
+      const QString album = info.song_.effective_album();
+      const QString author = info.song_.effective_albumartist();
+      if (common_album.isEmpty()) common_album = album;
+      else if (common_album != album) album_common = false;
+      if (common_author.isEmpty()) common_author = author;
+      else if (common_author != author) author_common = false;
+    }
+
+    PodcastDetailsDialog dialog(this);
+    dialog.SetInitialValues(album_common ? common_album : QString(), author_common ? common_author : QString());
+    if (dialog.exec() != QDialog::Accepted) {
+      // User cancelled the podcast prompt; abort the whole copy so we never
+      // sync half-configured podcasts.
+      return;
+    }
+    podcast_info = dialog.info();
+  }
+
+  // Audiobooks: combine every chapter file that belongs to the same book into a
+  // SINGLE .m4b (one chapter marker per source track) BEFORE handing off to the
+  // Organize pipeline. The iPod firmware groups audiobooks by their (album,
+  // album-artist) identity and only shows one representative title per group, so
+  // a book ripped as N chapter files otherwise fragments into N single-chapter
+  // "audiobooks" named after the chapters. Merging to one file per book sidesteps
+  // the grouping entirely: one book == one audiobook with the book's title and
+  // working per-chapter navigation. Lossless stream-copy is used when every input
+  // is already AAC/ALAC-in-MP4; otherwise the book is re-encoded once to AAC.
+  if (media_type == MusicStorage::DeviceMediaType::Audiobook) {
+    Settings audiobook_settings;
+    audiobook_settings.beginGroup(AudiobookSettings::kSettingsGroup);
+    const bool merge_enabled = audiobook_settings.value(AudiobookSettings::kMergeEnabled, AudiobookSettings::kMergeEnabledDefault).toBool();
+    audiobook_settings.endGroup();
+
+    // When merging is disabled the user wants chapters synced as-is (legacy
+    // behaviour), so skip the whole combine step.
+    if (merge_enabled) {
+    AudiobookMerger merger(this);
+    merger.SetTagReaderClient(tagreader_client_);
+
+    // Modal progress dialog with Cancel. The merge runs synchronously on this
+    // thread but pumps the event loop (both here between books and inside
+    // AudiobookMerger while ffmpeg runs), so this dialog stays responsive and
+    // its Cancel button actually interrupts an in-flight ffmpeg.
+    QProgressDialog progress(tr("Combining audiobook chapters…"), tr("Cancel"), 0, 0, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setMinimumDuration(0);
+    progress.setAutoClose(false);
+    progress.setAutoReset(false);
+    progress.show();
+
+    merger.SetProgressCallback([&progress](int done, int total, const QString &book_title) {
+      if (total > 0) {
+        progress.setMaximum(total);
+        progress.setValue(done);
+      }
+      progress.setLabelText(tr("Combining audiobook \"%1\" (%2 of %3)…").arg(book_title).arg(qMin(done + 1, total)).arg(total));
+    });
+    merger.SetCancelCallback([&progress]() -> bool { return progress.wasCanceled(); });
+
+    AudiobookMerger::Result merge_result = merger.MergeByBook(new_songs_info_, format_);
+    progress.close();
+
+    if (merge_result.cancelled) {
+      // User aborted: sync nothing.
+      return;
+    }
+
+    if (!merge_result.ok || merge_result.songs_info.isEmpty()) {
+      const QString details = merge_result.errors.join(u'\n');
+      QMessageBox::warning(this, tr("Combine audiobooks"),
+          merge_result.songs_info.isEmpty()
+              ? tr("None of the selected audiobooks could be combined.\n\n%1").arg(details)
+              : tr("Some audiobooks could not be combined and were skipped:\n\n%1").arg(details));
+      if (merge_result.songs_info.isEmpty()) {
+        // Nothing left to sync; abort so we never sync a half-merged book.
+        return;
+      }
+    }
+
+    // Replace the per-chapter selection with one merged book per entry.
+    new_songs_info_ = merge_result.songs_info;
+    audiobook_chapters_ = merge_result.chapters_by_file;
+    }  // if (merge_enabled)
+  }
+
+  Organize *organize = new Organize(task_manager_, tagreader_client_, storage, format_, copy, ui_->overwrite->isChecked(), ui_->albumcover->isChecked(), new_songs_info_, ui_->eject_after->isChecked(), media_type, podcast_info, playlist_, audiobook_chapters_);
   QObject::connect(organize, &Organize::Finished, this, &OrganizeDialog::OrganizeFinished);
   QObject::connect(organize, &Organize::FileCopied, this, &OrganizeDialog::FileCopied);
   if (collection_backend_) {

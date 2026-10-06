@@ -255,6 +255,63 @@
     </widget>
    </item>
    <item>
+    <widget class="QWidget" name="media_type_container" native="true">
+     <layout class="QHBoxLayout" name="media_type_layout">
+      <property name="leftMargin">
+       <number>0</number>
+      </property>
+      <property name="topMargin">
+       <number>0</number>
+      </property>
+      <property name="rightMargin">
+       <number>0</number>
+      </property>
+      <property name="bottomMargin">
+       <number>0</number>
+      </property>
+      <item>
+       <widget class="QLabel" name="label_media_type">
+        <property name="text">
+         <string>Copy to device as</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="media_type">
+        <item>
+         <property name="text">
+          <string>Music</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>Podcast</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>Audiobook</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item>
+       <spacer name="media_type_spacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QCheckBox" name="eject_after">
      <property name="text">
       <string>Safely remove the device after copying</string>
@@ -300,6 +357,7 @@
   <tabstop>replace_spaces</tabstop>
   <tabstop>overwrite</tabstop>
   <tabstop>albumcover</tabstop>
+  <tabstop>media_type</tabstop>
   <tabstop>eject_after</tabstop>
   <tabstop>preview</tabstop>
  </tabstops>

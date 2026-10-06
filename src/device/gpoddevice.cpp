@@ -364,6 +364,190 @@ bool GPodDevice::CopyToStorage(const CopyJob &job, QString &error_text) {
 
   Itdb_Track *track = AddTrackToITunesDb(job.metadata_);
 
+  // Device media-type routing. Music is the historical default and needs no
+  // special handling (AddTrackToITunesDb already placed the track in the Music
+  // master playlist with mediatype Audio). Podcast and Audiobook re-flag the
+  // track and move it out of the MPL so the iPod firmware surfaces it under the
+  // correct menu.
+  switch (job.media_type_) {
+    case MusicStorage::DeviceMediaType::Music:
+      // Nothing to do — default behaviour.
+      break;
+
+    case MusicStorage::DeviceMediaType::Podcast: {
+      track->mediatype = ITDB_MEDIATYPE_PODCAST;
+
+      // --- Podcast GROUPING ---
+      //
+      // The iPod firmware builds the "Podcasts" menu by grouping episodes into
+      // one browsable show per *feed*. The feed identity is the track's
+      // RSS/feed URL (`track->podcastrss`), NOT the album. If podcastrss is
+      // empty, every episode is treated as its own standalone feed, so N tracks
+      // show up as N separate podcasts and the menu becomes unbrowsable (the
+      // classic "48 podcasts I can't click into" symptom).
+      //
+      // The user supplies the show-level metadata via PodcastDetailsDialog. We
+      // prefer their explicit feed URL; otherwise we derive a stable per-show
+      // URL from the show title (falling back to the track's album/title). All
+      // episodes sharing the same show therefore get the same podcastrss and
+      // the firmware collapses them into one show with multiple episodes.
+      QString show_key = job.podcast_info_.show_title_;
+      if (show_key.isEmpty()) show_key = job.podcast_info_.feed_url_;
+      if (show_key.isEmpty()) {
+        show_key = !job.metadata_.album().isEmpty() ? job.metadata_.album() : job.metadata_.title();
+      }
+
+      QByteArray feed_url;
+      if (!job.podcast_info_.feed_url_.isEmpty()) {
+        feed_url = job.podcast_info_.feed_url_.toUtf8();
+      }
+      else {
+        const QByteArray show_hash = QCryptographicHash::hash(show_key.toUtf8(), QCryptographicHash::Sha1).toHex();
+        feed_url = "strawberry://podcast/" + show_hash;
+      }
+
+      // Overwrite the per-track album/artist with the show-level values so the
+      // whole show presents consistently on the device. libgpod frees these
+      // strings with g_free, so (re)allocate with g_strdup/g_free accordingly.
+      if (!job.podcast_info_.show_title_.isEmpty()) {
+        g_free(track->album);
+        track->album = g_strdup(job.podcast_info_.show_title_.toUtf8().constData());
+      }
+      if (!job.podcast_info_.author_.isEmpty()) {
+        g_free(track->artist);
+        track->artist = g_strdup(job.podcast_info_.author_.toUtf8().constData());
+        g_free(track->albumartist);
+        track->albumartist = g_strdup(job.podcast_info_.author_.toUtf8().constData());
+      }
+      if (!job.podcast_info_.description_.isEmpty()) {
+        g_free(track->description);
+        track->description = g_strdup(job.podcast_info_.description_.toUtf8().constData());
+      }
+
+      // libgpod frees these with g_free, so allocate with g_strdup.
+      track->podcastrss = g_strdup(feed_url.constData());
+      track->podcasturl = g_strdup(feed_url.constData());
+
+      // --- Podcast FLAGS ---
+      //
+      // These mirror libgpod's own reference binding (bindings/python/ipod.py
+      // Track.set_podcast()) and are what make the firmware treat the track as
+      // a real podcast episode rather than a misfiled music track:
+      //   skip_when_shuffling        = 1  -> don't play in shuffle
+      //   remember_playback_position = 1  -> bookmarkable / resume
+      //   flag4                      = 1  -> show Title/Album on Now Playing
+      //   mark_unplayed              = 2  -> show the "unplayed" bullet (0x02);
+      //                                      firmware flips to 0x01 once played.
+      track->skip_when_shuffling = 0x01;
+      track->remember_playback_position = 0x01;
+      track->flag4 = 0x01;
+      track->mark_unplayed = 0x02;
+
+      // Podcast episodes live under the Podcasts playlist only, not the MPL.
+      Itdb_Playlist *mpl = itdb_playlist_mpl(db_);
+      if (mpl && itdb_playlist_contains_track(mpl, track)) {
+        itdb_playlist_remove_track(mpl, track);
+      }
+
+      // Find (or lazily create) the Podcasts playlist and add the track to it.
+      Itdb_Playlist *podcasts = itdb_playlist_podcasts(db_);
+      if (!podcasts) {
+        podcasts = itdb_playlist_new("Podcasts", false);
+        itdb_playlist_set_podcasts(podcasts);
+        itdb_playlist_add(db_, podcasts, -1);
+      }
+      itdb_playlist_add_track(podcasts, track, -1);
+
+      qLog(Info) << "GPodDevice::CopyToStorage: marked" << job.metadata_.title()
+                 << "as a podcast episode of show" << show_key
+                 << "(feed" << feed_url << ") and added it to the Podcasts playlist";
+      break;
+    }
+
+    case MusicStorage::DeviceMediaType::Audiobook: {
+      // --- Audiobooks ---
+      //
+      // Audiobooks are surfaced under Music -> Audiobooks, grouped by their
+      // `album` field and ordered by track number. Crucially, unlike podcasts,
+      // audiobook tracks are reached through a Music submenu, so per libgpod's
+      // README they MUST remain members of the master playlist (MPL) — any
+      // track not in the MPL is unreachable through the Music menus, which is
+      // why removing them made the Audiobooks entry empty and unplayable.
+      //
+      // So we deliberately do NOT touch MPL membership here (AddTrackToITunesDb
+      // already added the track to the MPL, which is exactly what we want). We
+      // also must NOT create an explicit Audiobooks playlist: there is no
+      // itdb_playlist_set_audiobooks() in libgpod and itdb_playlist_is_audiobooks()
+      // is derived purely from every member track's mediatype. Setting the
+      // mediatype plus the bookmarking flags is all that's required.
+      track->mediatype = ITDB_MEDIATYPE_AUDIOBOOK;
+      track->skip_when_shuffling = 0x01;
+      track->remember_playback_position = 0x01;  // resume where you left off
+      track->flag4 = 0x01;
+
+      // --- Audiobook GROUPING ---
+      //
+      // The iPod groups audiobooks under Music -> Audiobooks exactly like it
+      // groups albums: by the (album, album artist) pair. If those don't match
+      // *byte-for-byte* across every track, the firmware treats each track as
+      // its own single-track audiobook and then labels each entry with the
+      // track title instead of the book name — which is the "same book split
+      // into several audiobooks" symptom.
+      //
+      // Ripped-like-an-album tags usually diverge in small ways that break the
+      // key: a missing album artist on some tracks (the firmware then falls back
+      // to the per-track artist), a stray compilation flag, or a disc number.
+      // Normalise the grouping key so all tracks of the book collapse together:
+      //
+      //   1. Always populate album artist (fall back to artist) so the second
+      //      half of the key is stable and identical across tracks.
+      //   2. Clear the compilation flag — compilations are grouped separately
+      //      (under "Compilations") and would fragment the book.
+      //   3. Collapse disc number to a single disc so a multi-CD rip doesn't get
+      //      subdivided; chapter order is preserved via the track number.
+      if (!track->albumartist || track->albumartist[0] == '\0') {
+        g_free(track->albumartist);
+        const char *fallback = (track->artist && track->artist[0] != '\0') ? track->artist : "";
+        track->albumartist = g_strdup(fallback);
+      }
+      track->compilation = 0;
+      track->cd_nr = 0;
+      track->cds = 0;
+
+      // --- Audiobook CHAPTERS ---
+      //
+      // ffmpeg writes a QuickTime chapter *track* into the .m4b, but the iPod
+      // firmware ignores those entirely -- it only shows chapter navigation for
+      // chapters stored in the iTunesDB track record. So when the merger handed
+      // us a chapter list, write it into track->chapterdata via libgpod. This is
+      // what makes the merged book navigable chapter-by-chapter on the device.
+      if (!job.audiobook_chapters_.isEmpty()) {
+        Itdb_Chapterdata *chapterdata = itdb_chapterdata_new();
+        if (chapterdata) {
+          for (const MusicStorage::AudiobookChapter &chapter : job.audiobook_chapters_) {
+            const QByteArray title_utf8 = chapter.title_.toUtf8();
+            // libgpod copies the title; the gchar* is non-const in the API but
+            // not retained, so the temporary buffer is safe.
+            itdb_chapterdata_add_chapter(chapterdata,
+                                         static_cast<guint32>(chapter.start_ms_),
+                                         const_cast<gchar*>(title_utf8.constData()));
+          }
+          // itdb_track_new() already allocated an (empty) chapterdata; free it
+          // before replacing so we don't leak the default instance.
+          if (track->chapterdata) itdb_chapterdata_free(track->chapterdata);
+          track->chapterdata = chapterdata;
+          qLog(Info) << "GPodDevice::CopyToStorage: attached" << job.audiobook_chapters_.count()
+                     << "chapters to audiobook" << job.metadata_.album();
+        }
+      }
+
+      qLog(Info) << "GPodDevice::CopyToStorage: marked" << job.metadata_.title()
+                 << "as an audiobook (album" << job.metadata_.album()
+                 << "albumartist" << track->albumartist << ")";
+      break;
+    }
+  }
+
   // [cover-trace] Log what we received from Organize so we can correlate this
   // half of the trace with the Organize-side `[cover-trace]` lines and pinpoint
   // exactly where the cover is lost on the path Organize -> CopyToStorage ->
@@ -510,7 +694,47 @@ bool GPodDevice::CopyToStorage(const CopyJob &job, QString &error_text) {
     qLog(Error) << error_text;
     Q_EMIT Error(error_text);
 
-    // Need to remove the track from the db again
+    // Bug #14 (see .ai/10-ipod-sync.md §10.17): we already inserted `track`
+    // into `db_->tracks` AND into the master playlist via
+    // `AddTrackToITunesDb` above. `itdb_track_remove` only removes the track
+    // from `db_->tracks` and frees the memory -- it explicitly does NOT
+    // touch any playlist that contains the track (per its own docstring in
+    // `.idea/strawberry-libgpod/src/itdb_track.c`). If we just called it
+    // here, the master playlist (and any user playlist we already added
+    // this track to) would be left holding a dangling pointer to freed
+    // memory. On the very next `itdb_write` (via CommitCopy's throttled
+    // flush), libgpod's `prepare_itdb_for_write` walks `mpl->members`,
+    // calls `g_list_find(itdb->tracks, dangling)`, gets NULL, and
+    // `g_return_if_fail(link)` short-circuits without cleaning up --
+    // shortly followed by `jump_table_letter` reading `track->album`
+    // out of the freed slab, failing `g_utf8_validate`, and finally
+    // SIGABRT'ing the whole sync. That's the crash pattern in the
+    // 04:03:41 timestamp block of `.idea/docs/error.log`:
+    //
+    //   ERROR prepare_itdb_for_write: assertion 'link' failed
+    //   ERROR jump_table_letter: assertion 'g_utf8_validate(p,-1,NULL)' failed
+    //   Trace/BPT trap: 5
+    //
+    // The same dangling MPL entry also explains the cover-art
+    // misattribution reported alongside the crash: a freed `Itdb_Track`
+    // still has a `has_artwork=1` flag and a pending `ITDB_THUMB_TYPE_FILE`
+    // thumb entry that libgpod's ithumb-writer will happily encode into
+    // the .ithmb blob (reading `track->album`/`track->artist` from freed
+    // memory to derive the ArtworkDB (albumartist|album) key), which
+    // then attaches that cover to whichever real track's identity happens
+    // to hash into the same slot.
+    //
+    // Fix: iterate every playlist (MPL first, user playlists after) and
+    // scrub the dangling entry, then drop the cached cover fingerprint
+    // (its key is the pointer we're about to free), then finally hand
+    // the now-orphaned track to `itdb_track_remove` for the actual free.
+    for (GList *pl = db_->playlists; pl != nullptr; pl = pl->next) {
+      Itdb_Playlist *playlist = static_cast<Itdb_Playlist *>(pl->data);
+      if (playlist && itdb_playlist_contains_track(playlist, track)) {
+        itdb_playlist_remove_track(playlist, track);
+      }
+    }
+    cover_fingerprints_.remove(track);
     itdb_track_remove(track);
     return false;
   }

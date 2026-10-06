@@ -29,6 +29,7 @@
 #include <QDialog>
 #include <QFuture>
 #include <QList>
+#include <QMap>
 #include <QSize>
 #include <QString>
 #include <QStringList>
@@ -129,6 +130,9 @@ class OrganizeDialog : public QDialog {
   QFuture<SongList> songs_future_;
   SongList songs_;
   Organize::NewSongInfoList new_songs_info_;
+  // Chapter markers for merged audiobooks, keyed by merged `.m4b` local path.
+  // Populated by AudiobookMerger in accept() and forwarded to Organize.
+  QMap<QString, MusicStorage::AudiobookChapterList> audiobook_chapters_;
   quint64 total_size_;
   QString playlist_;
 
