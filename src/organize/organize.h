@@ -38,6 +38,7 @@
 
 #include "includes/shared_ptr.h"
 #include "core/song.h"
+#include "core/musicstorage.h"
 #include "organizeformat.h"
 
 class QThread;
@@ -72,7 +73,10 @@ class Organize : public QObject {
                     const NewSongInfoList &songs,
                     const QStringList &original_roots,
                     const bool eject_after,
+                    const MusicStorage::DeviceMediaType media_type = MusicStorage::DeviceMediaType::Music,
+                    const MusicStorage::PodcastInfo &podcast_info = MusicStorage::PodcastInfo(),
                     const QString &playlist = QString(),
+                    const QMap<QString, MusicStorage::AudiobookChapterList> &audiobook_chapters = QMap<QString, MusicStorage::AudiobookChapterList>(),
                     QObject *parent = nullptr);
 
   ~Organize() override;
@@ -199,6 +203,11 @@ class Organize : public QObject {
   const bool eject_after_;
   // The collection and device directories of the songs and the root of the destination, empty directories left by moving songs are only removed inside these.
   QStringList original_roots_;
+  const MusicStorage::DeviceMediaType media_type_;
+  const MusicStorage::PodcastInfo podcast_info_;
+  // Per merged-book chapter markers, keyed by the book's source local path
+  // (job.source_). Only populated for Audiobook syncs with merging enabled.
+  const QMap<QString, MusicStorage::AudiobookChapterList> audiobook_chapters_;
   quint64 task_count_;
   const QString playlist_;
 

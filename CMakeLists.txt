@@ -814,6 +814,7 @@ set(SOURCES
   src/dialogs/deleteconfirmationdialog.cpp
   src/dialogs/messagedialog.cpp
   src/dialogs/saveplaylistsdialog.cpp
+  src/dialogs/podcastdetailsdialog.cpp
 
   src/widgets/autoexpandingtreeview.cpp
   src/widgets/busyindicator.cpp
@@ -930,6 +931,7 @@ set(SOURCES
   src/device/deviceview.cpp
   src/device/devicesyncprogressmodel.cpp
   src/device/devicesyncprogressview.cpp
+  src/device/audiobookmerger.cpp
 )
 
 set(HEADERS
@@ -1126,6 +1128,7 @@ set(HEADERS
   src/dialogs/deleteconfirmationdialog.h
   src/dialogs/messagedialog.h
   src/dialogs/saveplaylistsdialog.h
+  src/dialogs/podcastdetailsdialog.h
 
   src/widgets/autoexpandingtreeview.h
   src/widgets/busyindicator.h
@@ -1232,6 +1235,7 @@ set(HEADERS
   src/device/deviceview.h
   src/device/devicesyncprogressmodel.h
   src/device/devicesyncprogressview.h
+  src/device/audiobookmerger.h
 )
 
 set(UI
@@ -1289,6 +1293,7 @@ set(UI
   src/dialogs/userpassdialog.ui
   src/dialogs/messagedialog.ui
   src/dialogs/saveplaylistsdialog.ui
+  src/dialogs/podcastdetailsdialog.ui
 
   src/widgets/trackslider.ui
   src/widgets/loginstatewidget.ui

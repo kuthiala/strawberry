@@ -1654,6 +1654,187 @@ startup) would be nice-to-have but is not part of this fix.
 
 ---
 
+## 10.17 Bug #14: `itdb_track_remove` on a Failed Copy Leaves a Dangling Pointer in the MPL
+
+> **Severity: catastrophic; also the root cause of the residual cover
+> misattribution left over after the Bug #8/#9 throttling fix
+> (§10.12).** Reproduced deterministically on any sync where one file
+> fails to copy after being inserted into the in-memory iTunesDB. On
+> the ~120 GB library reported in `.idea/docs/error.log` the sync
+> aborted with `Trace/BPT trap: 5` (SIGABRT from a `g_error()`-class
+> assertion failure) roughly one commit after the first failed
+> `itdb_cp_track_to_ipod` call.
+
+### Symptom fingerprint
+
+From `.idea/docs/error.log` at 04:03:41–04:03:45:
+
+```
+04:03:41.932 ERROR GPodDevice:510 "Could not copy 02 Breathe (In the Air).m4a to /Volumes/iPod: Error opening '...transcoder/02 Breathe (In the Air)-0.m4a' for reading (No such file or directory)."
+…
+04:03:42.844 INFO  GPodDevice:905 GPodDevice::CommitCopy: flushing iTunesDB after 24 songs (time trigger)
+04:03:42.941 INFO  GPodDevice:568 GPodDevice::WriteDatabase: pre-write pressure relief returned 0 bytes to the OS
+04:03:42.942 ERROR logging:88   prepare_itdb_for_write: assertion 'link' failed
+04:03:45.437 ERROR logging:88   jump_table_letter: assertion 'g_utf8_validate (p, -1, NULL)' failed
+Trace/BPT trap: 5
+```
+
+Two GLib assertions right before SIGABRT are the giveaway:
+
+1. **`prepare_itdb_for_write: assertion 'link' failed`** — in
+   `.idea/strawberry-libgpod/src/itdb_itunesdb.c` around line 5964:
+
+   ```c
+   for (gl=g_list_last(mpl->members); gl; gl=gl->prev)
+   {
+       GList *link;
+       Itdb_Track *track = gl->data;
+       g_return_if_fail (track);
+       link = g_list_find (itdb->tracks, track);
+       g_return_if_fail (link);   // ← this fires
+       …
+   }
+   ```
+
+   The assertion means: a pointer in the master playlist's `members`
+   list is NOT present in `itdb->tracks`. i.e. the MPL is holding a
+   dangling reference.
+
+2. **`jump_table_letter: assertion 'g_utf8_validate (p, -1, NULL)'
+   failed`** — the next step in `prepare_itdb_for_write` reads
+   `track->album` / `track->artist` off the (already-freed) `Itdb_Track`,
+   gets garbage bytes, feeds them to `jump_table_letter` (the collate-
+   key builder), and `g_utf8_validate` correctly rejects the garbage.
+   With `G_DEBUG=fatal-warnings` (which macOS ships by default in some
+   GLib builds), a `g_return_val_if_fail` at the top of a `G_LOG_LEVEL_
+   CRITICAL` handler `g_error()`s the process → SIGABRT → `Trace/BPT
+   trap: 5`.
+
+### Root cause
+
+Strawberry's `GPodDevice::CopyToStorage` in `src/device/gpoddevice.cpp`
+does this (pre-fix):
+
+```cpp
+Itdb_Track *track = AddTrackToITunesDb(job.metadata_);   // ①
+// … cover attach, other setup …
+itdb_cp_track_to_ipod(track, src, &error);
+if (error) {
+  …
+  itdb_track_remove(track);   // ②
+  return false;
+}
+```
+
+Step ① adds `track` to **both** `db_->tracks` **and** to
+`itdb_playlist_mpl(db_)->members`. Step ② calls `itdb_track_remove`
+whose libgpod docstring (in `itdb_track.c`) reads verbatim:
+
+> Removes @track from the #Itdb_iTunesDB it's associated with, and
+> frees the memory it uses. **It doesn't remove the track from the
+> playlists it may have been added to, in particular it won't be
+> removed from the master playlist.**
+
+So after ②:
+
+- `db_->tracks` no longer contains `track`. ✅
+- `track`'s memory is freed. ✅
+- `mpl->members` still contains a pointer to that freed memory. ❌
+
+The next `WriteDatabase` (triggered by `CommitCopy`'s throttled flush
+from Bug #8/#9's §10.12 fix — kCommitEvery=50 or kCommitIntervalMs=30 s)
+calls `itdb_write` → `itdb_write_file_internal` → `prepare_itdb_for_
+write`, which walks `mpl->members`, finds the dangling pointer, fails
+the `link` assertion, then dereferences the freed slab to build sort
+keys — SIGABRT.
+
+### Why this ALSO explains the cover misattribution (Bug #9 residual)
+
+Even when `WriteDatabase` completes successfully on earlier commits
+(before enough failed copies have accumulated to definitely hit a
+dangling entry during that commit's playlist iteration), the freed
+`Itdb_Track` still:
+
+- Was flagged `has_artwork = 1` before the failure (we attach the
+  cover BEFORE calling `itdb_cp_track_to_ipod`).
+- Has a pending `ITDB_THUMB_TYPE_FILE` thumb entry pointing at a
+  temp JPEG that is still on disk (Strawberry holds a
+  `SharedPtr<TemporaryFile>` in `cover_files_` until WriteDatabase()
+  clears it).
+- Is still referenced from `mpl->members`, so libgpod's ithumb-writer
+  walks it during `itdb_write_ithumb_files`, reads
+  `track->album`/`track->artist`/`track->dbid` from freed memory (which
+  the malloc allocator may have already reused for a totally different
+  in-flight `Itdb_Track` allocated by a subsequent `CopyToStorage`),
+  encodes the JPEG into the .ithmb blob, and attaches it to whatever
+  `(albumartist|album)` string happens to be in the reused slab.
+
+This is exactly the "same slot_sha1 attached to different identities"
+pattern we were catching with the diagnostic instrumentation in
+§10.15 — but the root cause turned out to be Strawberry-side, not
+libgpod-side. The instrumentation stays in place; it's still the
+fastest way to catch a future regression.
+
+### The fix
+
+Mirror what `RemoveTrackFromITunesDb` (delete path) already does
+correctly: iterate every playlist, remove the track from each one
+that contains it, THEN call `itdb_track_remove`. Also drop the
+`cover_fingerprints_` entry keyed on the pointer we're about to free
+so we don't leak a stale entry into the next WriteDatabase's
+diagnostic pass.
+
+```cpp
+// src/device/gpoddevice.cpp (AFTER)
+if (error) {
+  …
+  for (GList *pl = db_->playlists; pl != nullptr; pl = pl->next) {
+    Itdb_Playlist *playlist = static_cast<Itdb_Playlist *>(pl->data);
+    if (playlist && itdb_playlist_contains_track(playlist, track)) {
+      itdb_playlist_remove_track(playlist, track);
+    }
+  }
+  cover_fingerprints_.remove(track);
+  itdb_track_remove(track);
+  return false;
+}
+```
+
+`db_->playlists` includes the master playlist as its first element in
+every libgpod-generated iTunesDB, so a single loop covers both the MPL
+and any user playlist we may have already added the track to (the
+`if (!job.playlist_.isEmpty())` branch further down `CopyToStorage`
+runs AFTER `itdb_cp_track_to_ipod`, so today only the MPL is affected,
+but the loop is future-proof against reordering).
+
+### Files
+
+- `src/device/gpoddevice.cpp` — `CopyToStorage`'s error branch now
+  scrubs the track from all playlists and the cover-fingerprint map
+  before calling `itdb_track_remove`.
+
+### How to validate after a future regression
+
+1. Deliberately induce a failed copy by making a source file
+   unreadable (e.g. `chmod 000 /path/to/one.flac`) during a sync.
+2. Watch `~/Library/Logs/Strawberry/strawberry-stdout.txt`. You should
+   see:
+   - `Could not copy … to /Volumes/iPod: …` (the expected failure).
+   - `GPodDevice::CommitCopy: flushing iTunesDB after N songs` roughly
+     `kCommitIntervalMs` later.
+   - `GPodDevice::WriteDatabase: pre-write pressure relief returned…`
+   - `[cover-trace] WriteDatabase: itdb_write returned true`
+   - NO `prepare_itdb_for_write: assertion 'link' failed`.
+   - NO `jump_table_letter: assertion` failure.
+   - NO `Trace/BPT trap: 5`.
+3. The sync should proceed past the failed file and successfully copy
+   the remaining tracks. If any of the assertions above reappears the
+   fix has regressed — check that both the playlist-scrub loop and the
+   `cover_fingerprints_.remove(track)` call are still present ahead of
+   `itdb_track_remove(track)` in the error branch of `CopyToStorage`.
+
+---
+
 ## 10.11 Further Reading
 
 - [`docs/iPod-copy-flow.md`](../docs/iPod-copy-flow.md) — earlier scratch notes on the
