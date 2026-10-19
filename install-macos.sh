@@ -23,7 +23,7 @@
 #                into /opt (and install minimal brew build tools)
 #   configure    Run cmake configure step only
 #   build        Configure (if needed) + compile
-#   bundle       Run `make deploy` (macdeployqt + bundles dylibs/plugins)
+#   bundle       Run `make deploy` (macdeploytool: Qt + GStreamer + dylibs)
 #   install      Copy strawberry.app into the Applications folder
 #   uninstall    Remove the installed strawberry.app (keeps user data + tarball)
 #   purge        uninstall + remove user prefs + build dir + cached tarball
@@ -39,7 +39,7 @@
 #   --prefix DIR        Where to install the .app (default: /Applications)
 #   --build-type TYPE   CMake build type (default: Release)
 #   --jobs N            Parallel jobs (default: number of CPUs)
-#   --no-bundle         Skip the macdeployqt bundling step (faster dev loop)
+#   --no-bundle         Skip the macdeploytool bundling step (faster dev loop)
 #   --refresh-deps      Re-download the deps tarball even if cached
 #   --yes, -y           Don't prompt before destructive actions
 #   --verbose, -v       Verbose output (set -x)
@@ -239,7 +239,7 @@ deps_tarball_cache_path() { echo "${INSTALL_CACHE_DIR}/${DEPS_TARBALL_NAME}"; }
 # Is the tarball already extracted into /opt?
 deps_installed() {
   [[ -d "${DEPS_PREFIX}" ]] \
-    && [[ -x "${DEPS_PREFIX}/bin/macdeployqt" ]] \
+    && [[ -x "${DEPS_PREFIX}/bin/macdeploytool" ]] \
     && [[ -d "${DEPS_PREFIX}/lib/cmake" ]]
 }
 
@@ -281,7 +281,7 @@ ensure_strawberry_macos_deps() {
   sudo tar -C / -xf "${cache_path}"
 
   deps_installed \
-    || fatal "Extraction did not produce ${DEPS_PREFIX} or it lacks macdeployqt."
+    || fatal "Extraction did not produce ${DEPS_PREFIX} or it lacks macdeploytool."
   ok "Strawberry macOS dependencies installed at ${DEPS_PREFIX}"
 }
 
@@ -362,33 +362,21 @@ cmd_build() {
 }
 
 cmd_bundle() {
-  step "Bundling dependencies into ${APP_NAME} (macdeployqt + gst plugins)"
+  step "Bundling dependencies into ${APP_NAME} (macdeploytool)"
   ensure_build_tools
   ensure_strawberry_macos_deps
 
   [[ -d "${BUILD_DIR}/${APP_NAME}" ]] \
     || fatal "${BUILD_DIR}/${APP_NAME} not found — run 'build' first."
 
-  # All four env vars are required by dist/macos/macgstcopy.sh; the deploy
-  # target then calls macdeployqt to gather Qt frameworks + plugins.
-  local gio_extra_modules="${DEPS_PREFIX}/lib/gio/modules"
-  local gst_plugin_scanner="${DEPS_PREFIX}/libexec/gstreamer-1.0/gst-plugin-scanner"
-  local gst_plugin_path="${DEPS_PREFIX}/lib/gstreamer-1.0"
-  local libsoup_lib="${DEPS_PREFIX}/lib/libsoup-3.0.0.dylib"
-
-  [[ -d "${gio_extra_modules}"   ]] || fatal "Missing ${gio_extra_modules}"
-  [[ -x "${gst_plugin_scanner}"  ]] || fatal "Missing ${gst_plugin_scanner}"
-  [[ -d "${gst_plugin_path}"     ]] || fatal "Missing ${gst_plugin_path}"
-  [[ -e "${libsoup_lib}"         ]] || warn  "Missing ${libsoup_lib} (HTTP streaming via libsoup may fail)"
-
+  # Since upstream 1.2.2x the `deploy` target runs macdeploytool, which
+  # installs the bundle resources (Info.plist, icns) and copies Qt frameworks,
+  # GStreamer plugins + gst-plugin-scanner and every dylib on its own. The old
+  # macgstcopy.sh + GIO/GST env-var dance is gone.
   PATH="${DEPS_PREFIX}/bin:${PATH}" \
-  GIO_EXTRA_MODULES="${gio_extra_modules}" \
-  GST_PLUGIN_SCANNER="${gst_plugin_scanner}" \
-  GST_PLUGIN_PATH="${gst_plugin_path}" \
-  LIBSOUP_LIBRARY_PATH="${libsoup_lib}" \
     cmake --build "${BUILD_DIR}" --target deploy
 
-  # Ad-hoc codesign every dylib + the app bundle. macdeployqt does most of
+  # Ad-hoc codesign every dylib + the app bundle. macdeploytool does most of
   # this for us, but it skips a handful that the official CI signs by hand
   # (libbrotli*, libpng16, libfreetype, libsoup, libnghttp2, libpsl, etc.)
   # using an Apple Developer ID. Without that ID we sign with "-" (ad-hoc),
@@ -397,7 +385,7 @@ cmd_bundle() {
   codesign_bundle_adhoc "${BUILD_DIR}/${APP_NAME}"
 
   # ----------------------------------------------------------------------
-  # The CMake `deploy` target fires `macdeployqt` twice in parallel (main
+  # Historical (macdeployqt era): the `deploy` target fired macdeployqt twice in parallel (main
   # pass + recursive `-executable=gst-plugin-scanner` pass). They mutate
   # the same files via `install_name_tool`, which renames-then-rewrites,
   # so the two passes race on a handful of files and one pass fails with
@@ -414,7 +402,7 @@ cmd_bundle() {
   local -a dirty_files=()
   bundle_collect_dirty "${BUILD_DIR}/${APP_NAME}" dirty_files
   if (( ${#dirty_files[@]} > 0 )); then
-    warn "${#dirty_files[@]} file(s) still reference ${DEPS_PREFIX}/lib after macdeployqt:"
+    warn "${#dirty_files[@]} file(s) still reference ${DEPS_PREFIX}/lib after deploy:"
     local f
     for f in "${dirty_files[@]}"; do log "  DIRTY: ${f}"; done
     info "Repairing residual /opt references in-place (install_name_tool + ad-hoc resign)"
@@ -431,7 +419,7 @@ cmd_bundle() {
   fi
 
   # ----------------------------------------------------------------------
-  # Stale-content audit. `macdeployqt` only copies a lib into the bundle
+  # Stale-content audit. The deploy tool only copies a lib into the bundle
   # when no file of that name is already there -- it does NOT compare
   # timestamps or hashes. So if the user (or one of our /opt-patching
   # workflows) rebuilds e.g. `${DEPS_PREFIX}/lib/libgpod.dylib`, the older
@@ -533,7 +521,7 @@ bundle_repair_dirty() {
 # `${DEPS_PREFIX}/lib/gstreamer-1.0/<basename>` for GStreamer plugins) AND
 # whose contents differ from that source by SHA-256.
 #
-# Why this matters: `macdeployqt` only copies a dylib into the bundle when
+# Why this matters: the deploy tool only copies a dylib into the bundle when
 # the bundle doesn't already have a copy of the same name. It does NOT
 # compare timestamps or hashes. So once a lib is bundled, subsequent
 # `cmake --build`-driven rebuilds of `${DEPS_PREFIX}/lib/<x>.dylib` (e.g.
@@ -568,7 +556,7 @@ bundle_collect_stale() {
     fi
     # Compare the __TEXT,__text section hash, NOT the whole file. The
     # whole-file hash always diverges between bundle and src because:
-    #   * macdeployqt rewrote load commands (changes file header bytes),
+    #   * the deploy tool rewrote load commands (changes file header bytes),
     #   * codesign_bundle_adhoc appended a signature blob to __LINKEDIT,
     #   * install_name_tool may have grown the load-command pad region.
     # All of those touch file regions OUTSIDE __TEXT,__text. The compiled
