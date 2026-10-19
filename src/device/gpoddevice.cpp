@@ -31,7 +31,7 @@
 
 // `Q_OS_MACOS` is only defined once QtGlobal has been included above, so the
 // `<malloc/malloc.h>` include MUST come after (see Bug #11 in
-// `.ai/10-ipod-sync.md §10.14`).
+// `.ai/history/ipod-bug-diary.md §10.14`).
 #ifdef Q_OS_MACOS
 #  include <malloc/malloc.h>
 #endif
@@ -635,7 +635,7 @@ bool GPodDevice::CopyToStorage(const CopyJob &job, QString &error_text) {
               // post-write, we'll be able to prove whether track X's
               // slot bytes correspond to track X's JPEG (correct) or
               // some other track's JPEG (misattribution). See
-              // .ai/10-ipod-sync.md §10.15.
+              // .ai/history/ipod-bug-diary.md §10.15.
               CoverFingerprint fp;
               fp.jpeg_sha1_hex = Sha1HexOfFile(cover_file->filename());
               fp.jpeg_size = saved_size;
@@ -739,7 +739,7 @@ bool GPodDevice::CopyToStorage(const CopyJob &job, QString &error_text) {
 
 bool GPodDevice::WriteDatabase(QString &error_text) {
 
-  // Bug #11 (see .ai/10-ipod-sync.md §10.14): Before every `itdb_write` we
+  // Bug #11 (see .ai/history/ipod-bug-diary.md §10.14): Before every `itdb_write` we
   // release any free heap pages back to the kernel. `itdb_write`'s inner
   // hot path re-walks every track, allocates a growing WContents buffer via
   // `g_realloc` (see libgpod's `wcontents_maybe_expand`), and re-encodes
@@ -818,7 +818,7 @@ bool GPodDevice::WriteDatabase(QString &error_text) {
     }
   }
 
-  // [cover-trace] POST-WRITE PIXEL FINGERPRINT SCAN — see .ai/10-ipod-sync.md §10.15.
+  // [cover-trace] POST-WRITE PIXEL FINGERPRINT SCAN — see .ai/history/ipod-bug-diary.md §10.15.
   //
   // This is the evidence-capture step for the cover misattribution bug
   // (Bug #9). We can't use libgpod's private `itdb_thumb_ipod_get_filename`
@@ -1023,7 +1023,7 @@ bool GPodDevice::WriteDatabase(QString &error_text) {
 
 void GPodDevice::Finish(const bool success) {
 
-  // Bug #5 follow-up (see .ai/10-ipod-sync.md §10.8):
+  // Bug #5 follow-up (see .ai/history/ipod-bug-diary.md §10.8):
   //
   // We unconditionally apply `songs_to_add_` / `songs_to_remove_` to the
   // Strawberry-side collection cache, even if `success` is false. By the

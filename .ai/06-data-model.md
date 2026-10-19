@@ -15,7 +15,7 @@ In [`data/schema/`](../data/schema/):
 
 | File              | Purpose                                                                |
 | ----------------- | ---------------------------------------------------------------------- |
-| `schema.sql`      | The **current** baseline schema. Bootstraps a fresh DB at version `23`.|
+| `schema.sql`      | The **current** baseline schema. Bootstraps a fresh DB at version `30`.|
 | `schema-NN.sql`   | One per migration step. Applied in order from the current DB version. |
 | `device-schema.sql` | Baseline schema for a per-device DB (`devices/<uuid>/strawberry.db`). |
 
@@ -37,7 +37,7 @@ When `Database` starts up:
 
 ## Top-level Tables
 
-Inferred from [`data/schema/schema.sql`](../data/schema/schema.sql) (version 23):
+Inferred from [`data/schema/schema.sql`](../data/schema/schema.sql) (version 30, as of upstream 1.2.31 — check `INSERT INTO schema_version` at the bottom of the file):
 
 ### Library
 

@@ -72,7 +72,7 @@ class Transcoder : public QObject {
   // returned path is *reserved* until the corresponding job completes,
   // so two concurrent GetFile() calls with the same basename cannot
   // return the same path even before either transcoder's filesink has
-  // opened the file on disk. See Bug #13 in `.ai/10-ipod-sync.md §10.16`.
+  // opened the file on disk. See Bug #13 in `.ai/history/ipod-bug-diary.md §10.16`.
   //
   // Note: previously a static method. Now non-static because it touches
   // per-instance `reserved_outputs_`. Callers already invoke it through
@@ -184,7 +184,7 @@ class Transcoder : public QObject {
   // Set of output paths that GetFile() has returned but whose transcode
   // has not yet completed. Used to avoid two GetFile() calls handing back
   // the same path before either job's filesink has actually created a
-  // file on disk (see Bug #13 / `.ai/10-ipod-sync.md §10.16`).
+  // file on disk (see Bug #13 / `.ai/history/ipod-bug-diary.md §10.16`).
   //
   // Populated by GetFile(), drained by event() when a JobFinishedEvent
   // fires (and by ReleaseOutput() for the extra protection window between

@@ -70,9 +70,9 @@ Look for `optional_component(…)` calls in [`CMakeLists.txt`](../CMakeLists.txt
 
 ## Adding / Removing Source Files
 
-⚠️ **The top-level [`CMakeLists.txt`](../CMakeLists.txt) lists every `.cpp` and `.h` file explicitly** (in the `set(SOURCES …)` and `set(HEADERS …)` blocks, plus separate Mac/Win sections and `optional_source(...)` calls). When you add a file:
+⚠️ **The top-level [`CMakeLists.txt`](../CMakeLists.txt) lists every `.cpp` and `.h` file explicitly** (in the `set(SOURCES …)` and `set(HEADERS …)` blocks, plus separate Mac/Win sections and `if(HAVE_X) list(APPEND SOURCES …) / list(APPEND HEADERS …) endif()` blocks for optional features; upstream removed the old `optional_source()` helper in 2026). When you add a file:
 
-1. Add the `.cpp` to `SOURCES` (or to a guarded `optional_source(...)` if it's behind a feature flag).
+1. Add the `.cpp` to `SOURCES` (or to the matching `if(HAVE_X) list(APPEND SOURCES …)` block if it's behind a feature flag).
 2. Add the `.h` to `HEADERS` **if it contains `Q_OBJECT`** (otherwise it's not strictly required, but recommended for consistency).
 3. If the file uses a `.ui`, add it to `UI` and the form will be processed by `qt_wrap_ui`.
 

@@ -243,7 +243,7 @@ void Organize::ProcessSomeFiles() {
   // controls the timer re-arm below. Ordering guarantee is now
   // "top-eligible-first" rather than strictly "top-first", which lets the
   // sidebar keep progressing while a stuck song is cooling down.
-  // See `.ai/10-ipod-sync.md §10.16` for full context.
+  // See `.ai/history/ipod-bug-diary.md §10.16` for full context.
   const qint64 now_ms = QDateTime::currentMSecsSinceEpoch();
   qint64 earliest_due_ms = 0;
   for (int i = 0; i < kBatchSize; ++i) {
@@ -471,7 +471,7 @@ void Organize::ProcessSomeFiles() {
       Q_EMIT SongSyncProgress(task.song_info_.song_, true);
 
       // Clean up the temporary transcoded file and free its Transcoder
-      // reservation (Bug #13, see `.ai/10-ipod-sync.md §10.16`) so a
+      // reservation (Bug #13, see `.ai/history/ipod-bug-diary.md §10.16`) so a
       // subsequent song with the same basename can safely reuse the
       // name. Order matters: remove the file FIRST so ReleaseOutput's
       // successor GetFile call sees the free name via the disk check
@@ -568,7 +568,7 @@ void Organize::ProcessSomeFiles() {
     // The scan is O(N) worst-case per batch, but N is bounded by the
     // caller's queue size (max ~thousands) and the per-tick fixed cost
     // is dominated by the actual disk / device I/O in the batch itself.
-    // See `.ai/10-ipod-sync.md §10.16` — the failure mode this closes
+    // See `.ai/history/ipod-bug-diary.md §10.16` — the failure mode this closes
     // is a 300 s stall of the entire sync behind one bad song.
     const qint64 now_after_batch = QDateTime::currentMSecsSinceEpoch();
     bool have_more_eligible = false;

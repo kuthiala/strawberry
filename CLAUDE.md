@@ -71,8 +71,12 @@ Smart-pointer aliases live in `src/includes/`: `SharedPtr<T>` (= `std::shared_pt
 
 ### Optional features
 
-Most features are compile-time optional, gated by `HAVE_*` macros generated into `config.h` (from `src/config.h.in`). In `CMakeLists.txt` they are added with the `optional_source(HAVE_X SOURCES ... HEADERS ...)` helper. Platform/feature code must be guarded with the matching `#ifdef HAVE_X` and CMake guard. D-Bus interfaces/adaptors (MPRIS2, notifications, UDisks2, KGlobalAccel) are generated from XML via `qt_add_dbus_interface` / `qt_add_dbus_adaptor`.
+Most features are compile-time optional, gated by `HAVE_*` macros generated into `config.h` (from `src/config.h.in`). In `CMakeLists.txt` they are added in `if(HAVE_X) list(APPEND SOURCES ...) list(APPEND HEADERS ...) endif()` blocks. Platform/feature code must be guarded with the matching `#ifdef HAVE_X` and CMake guard. D-Bus interfaces/adaptors (MPRIS2, notifications, UDisks2, KGlobalAccel) are generated from XML via `qt_add_dbus_interface` / `qt_add_dbus_adaptor`.
 
 ### Platform-specific files
 
 Suffix conventions: `*_win.cpp`, `*-x11.cpp`, `*-macos.mm`/`.mm` (Objective-C++), `*qt.cpp` (Qt-portable fallback). Pick the implementation in `CMakeLists.txt` via platform conditionals.
+
+## This fork
+
+This is a fork (`kuthiala/strawberry`) with iPod sync hardening, a queued "Copy to device" pipeline, a Claude theme and macOS tooling on top of upstream. **Read [`.ai/README.md`](.ai/README.md) first**: it routes to the right reference file and lists the landmines (macOS bundling, the patched libgpod, iPod-sync rules) that past sessions lost hours on. Build on macOS with `./install-macos.sh build && ./install-macos.sh install -y`.

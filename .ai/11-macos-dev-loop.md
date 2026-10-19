@@ -6,6 +6,13 @@
 
 ---
 
+## 11.0 What changed with upstream 1.2.31 (2026-10)
+
+- **Deps tarball refresh was required**: upstream now needs `uchardet` (and Qt 6.12 / glib 2.90 ship in the current tarball). `./install-macos.sh deps --refresh-deps` re-downloads; it needs `sudo` to extract into `/opt`. If `/opt/strawberry_macos_<arch>_release` is owned by you, extracting the tarball into a temp dir and `rsync -a --delete <tmp>/opt/strawberry_macos_<arch>_release/ /opt/strawberry_macos_<arch>_release/` works without sudo. Keep the old tarball (renamed `*.OLD-<date>.tar.xz` in the cache dir) for rollback.
+- **Then rebuild the patched libgpod** ([§11.7](#117-the-libgpod-fork)), the refresh replaced it with the stock one.
+- **`macdeployqt` → `macdeploytool`**: upstream's `deploy` target (`cmake/Dmg.cmake`) now runs `macdeploytool --gstreamer-plugins=all`, which installs the bundle resources and copies Qt, GStreamer plugins, `gst-plugin-scanner` and dylibs itself. `dist/macos/macgstcopy.sh` and the `GIO_EXTRA_MODULES` / `GST_PLUGIN_*` / `LIBSOUP_LIBRARY_PATH` env vars are gone. `install-macos.sh` checks for `macdeploytool` in `deps_installed()`. Sections below that talk about `macdeployqt` races describe the old tool; the script's dirty/stale-bundle audits still run and still matter.
+- A stale `build/` from before the refresh fails to configure; `./install-macos.sh clean` first.
+
 ## 11.1 One-shot Install: `install-macos.sh`
 
 The repo ships a helper at the repo root, [`install-macos.sh`](../install-macos.sh),
@@ -16,7 +23,7 @@ that consolidates the multi-step macOS workflow into a few subcommands:
 | `deps`                | Verifies Homebrew + every dependency from [`CMakeLists.txt`](../CMakeLists.txt) is installed. Installs anything missing via `brew install`. Idempotent. |
 | `configure`           | Runs `cmake -S . -B build -G Ninja` with the correct prefix paths (`/opt/homebrew` on ARM, `/usr/local` on Intel). |
 | `build`               | `cmake --build build -j$(sysctl -n hw.ncpu)`. Fast incremental rebuild.                                   |
-| `bundle`              | Runs `macdeployqt` + ad-hoc codesign so `build/strawberry.app` is fully **self-contained** (every dylib reference rewritten from `/opt/strawberry_macos_<arch>_release/lib/...` to `@loader_path/...`). **Required after**: first build, `clean`, anything that changed `CMakeLists.txt` link lists, dependency upgrades, and re-pulled deps tarball. **Not required** for pure source edits that touched only `.cpp`/`.h`/`.ui` of already-linked targets. When in doubt, run it — it's idempotent (~2-4 min). See [§11.13 row 1](#1113-common-pitfalls) for the symptom when you skip it and shouldn't have. |
+| `bundle`              | Runs the CMake `deploy` target (**macdeploytool**, which also bundles the GStreamer plugins) + ad-hoc codesign so `build/strawberry.app` is fully **self-contained** (every dylib reference rewritten from `/opt/strawberry_macos_<arch>_release/lib/...` to `@loader_path/...`). **Required after**: first build, `clean`, anything that changed `CMakeLists.txt` link lists, dependency upgrades, and re-pulled deps tarball. **Not required** for pure source edits that touched only `.cpp`/`.h`/`.ui` of already-linked targets. When in doubt, run it — it's idempotent (~2-4 min). See [§11.13 row 1](#1113-common-pitfalls) for the symptom when you skip it and shouldn't have. |
 | `install [-y]`        | Copies `build/strawberry.app` → `/Applications/strawberry.app`. `-y` skips the "overwrite?" prompt.       |
 | `uninstall [-y]`      | Removes `/Applications/strawberry.app` and the app's settings directories under `~/Library/Application Support/Strawberry` and `~/Library/Preferences/com.strawberrymusicplayer.*`. |
 | `clean`               | `rm -rf build/`. Forces a from-scratch configure next time.                                               |
@@ -231,26 +238,26 @@ GST_DEBUG="3,GST_PIPELINE:4,alac*:5,mp4mux:5" ...
 
 ## 11.7 The libgpod Fork
 
-Strawberry pins its own `libgpod` (rather than using Homebrew's, which is
-abandoned and lacks fixes). The fork lives at
-[`.idea/strawberry-libgpod/`](../.idea/strawberry-libgpod/) as a git submodule
-referenced by [`.gitmodules`](../.gitmodules).
-
-When you change a Strawberry-side file that touches the libgpod ABI, you may
-also need to rebuild the submodule's static library:
+Strawberry ships a **patched libgpod** (Bug #4 `pack_*` overflow guards, Bug #11 checked `g_try_realloc` with geometric growth, see [`10-ipod-sync.md`](./10-ipod-sync.md) rule 5).
+The source is a local git checkout at `.idea/strawberry-libgpod/` (the whole `.idea/` directory is in `.gitignore`, it is **not** a submodule of this repo and has its own history: `git -C .idea/strawberry-libgpod log`).
+It builds with **CMake**, not autotools, against the deps in `/opt`:
 
 ```bash
-git submodule update --init --recursive
+D=/opt/strawberry_macos_x86_64_release   # arm64: ..._arm64_release
 cd .idea/strawberry-libgpod
-./autogen.sh && ./configure --prefix=/opt/strawberry-libgpod && make -j8 && sudo make install
+rm -rf build
+PATH=$D/bin:$PATH PKG_CONFIG_LIBDIR=$D/lib/pkgconfig PKG_CONFIG_PATH=$D/lib/pkgconfig \
+  cmake -S . -B build -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=$D -DCMAKE_PREFIX_PATH=$D/lib/cmake
+cmake --build build -j8
+strings build/libgpod.dylib | grep -c g_try_realloc     # must be > 0
+cp build/libgpod.dylib $D/lib/libgpod.dylib            # Bug #12: the bundle audit compares against /opt, not build/
 ```
 
-The CMake config in this repo picks the prefix up via `pkg-config`. The brew
-formula `libgpod` is shadowed when `/opt/strawberry-libgpod/lib/pkgconfig` is
-ahead of brew's `pkgconfig` on `PKG_CONFIG_PATH`.
+`-DCMAKE_POLICY_VERSION_MINIMUM=3.5` is needed since the deps tarball ships CMake 4, which refuses libgpod's old `cmake_minimum_required`.
 
-See [`10-ipod-sync.md`](./10-ipod-sync.md) for the actual sync flow and the
-libgpod symbols of interest.
+**When to rebuild:** after changing libgpod, and **every time the deps tarball is refreshed** — extracting a new tarball overwrites `/opt/.../lib/libgpod.dylib` with the stock, unpatched build, and the glib version changes underneath it.
+Backups kept in `~/Library/Caches/strawberry-install/`: `libgpod-patched-backup.dylib` (last patched build against the old deps) and `libgpod-stock-from-deps.dylib` (the stock one from the current tarball).
 
 ---
 
@@ -325,7 +332,7 @@ Or surgically, just the SQLite DB:
 rm -f "$HOME/Library/Application Support/Strawberry/Strawberry/strawberry.db"
 ```
 
-The app will re-create it at next start (schema `data/schema/schema-23.sql`).
+The app will re-create it at next start (from `data/schema/schema.sql`).
 
 ---
 

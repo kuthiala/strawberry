@@ -114,7 +114,7 @@ class GPodDevice : public ConnectedDevice, public virtual MusicStorage {
   // once per `kCommitInterval` of wall-clock time, whichever comes
   // first. The end-of-batch `FinishCopy()` continues to flush
   // unconditionally so nothing the user actually completed is ever lost.
-  // See `.ai/10-ipod-sync.md` §10.12 (Bug #8 / Bug #9) for the full
+  // See `.ai/history/ipod-bug-diary.md` §10.12 (Bug #8 / Bug #9) for the full
   // diagnosis and the crash log (`~/Library/Logs/DiagnosticReports/
   // strawberry-2026-06-30-140519.ips`) that drove the fix.
   bool CommitCopy(QString &error_text) override;
@@ -178,7 +178,7 @@ class GPodDevice : public ConnectedDevice, public virtual MusicStorage {
   QSet<QString> files_to_remove_;
   QList<SharedPtr<TemporaryFile>> cover_files_;
 
-  // Per-track cover-attach fingerprints (see .ai/10-ipod-sync.md §10.15).
+  // Per-track cover-attach fingerprints (see .ai/history/ipod-bug-diary.md §10.15).
   // Populated in CopyToStorage every time we call itdb_track_set_thumbnails:
   // the QByteArray is a hex-encoded SHA1 of the JPEG bytes we attached, plus
   // an "expected cover identity" derived from (albumartist|album). After

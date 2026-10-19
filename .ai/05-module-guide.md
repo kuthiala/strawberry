@@ -34,6 +34,8 @@ The "nervous system" of the application. Most other modules `#include` from here
 | `thread.h/.cpp`                           | `Thread` subclass of `QThread` with friendly naming and shutdown.         |
 | `iconloader.h/.cpp` / `standarditemiconloader.*` | App-wide icon lookup (resource + theme).                          |
 | `stylehelper.{h,cpp}` / `stylesheetloader.{h,cpp}` | Apply QSS, theme colours.                                       |
+| `claudetheme.{h,cpp}`                          | The Claude theme: Fusion + palette + `data/style/claude.css`. See [`13-claude-theme.md`](./13-claude-theme.md). |
+| `crashreporter.{h,cpp}`                        | Signal-safe crash logs in `~/Library/Logs/Strawberry/` (fork). |
 | `commandlineoptions.{h,cpp}`              | Parses argv (uses `getopt_long`); also serialises commands to the running instance. |
 | `logging.h/.cpp`                          | `qLog(Level)` macro, GLib log integration, category filters.              |
 | `metatypes.{h,cpp}`                       | All the `qRegisterMetaType<…>()` calls — extend here when you add a new value type used across threads / signals. |
@@ -357,7 +359,8 @@ GStreamer-based transcoder with per-codec option widgets.
 
 Renames and copies files using a user-defined format string (`%artist/%album/%track %title.%extension` etc.).
 
-- `organize.{h,cpp}` — the runner.
+- `organize.{h,cpp}` — the runner: one job, on its own thread, one song per unit of work with retries.
+- `organizequeue.{h,cpp}` — **the queue every job goes through** (per-destination serialisation, audiobook preparing, eject, cancel). See [`12-sync-queue.md`](./12-sync-queue.md).
 - `organizedialog.{h,cpp,ui}` / `organizeerrordialog.{h,cpp,ui}` — UI.
 - `organizeformat.{h,cpp}` — format string parser and applier.
 - `organizeformatvalidator.{h,cpp}` — Qt validator.
@@ -382,6 +385,9 @@ Removable USB drives, MTP devices (Android, etc.), and iPod Classic.
 | `connecteddevice.{h,cpp}` / `filesystemdevice.{h,cpp}` | Connected device state / generic filesystem.   |
 | `mtpdevice.{h,cpp}` / `mtploader.{h,cpp}` / `mtpconnection.{h,cpp}` | MTP (libmtp).                     |
 | `gpoddevice.{h,cpp}` / `gpodloader.{h,cpp}`    | iPod Classic (libgpod). **See [`10-ipod-sync.md`](./10-ipod-sync.md) for the *non-obvious* SysInfo / hash58 / filetype-string contracts you must satisfy or the iPod will silently reject the synced database.** |
+| `gpodplaylistmanager.{h,cpp}` / `gpodplaylistsdialog.{h,cpp}` | iPod playlist CRUD + "Manage iPod playlists…" dialog. |
+| `audiobookmerger.{h,cpp}`                      | Merges an audiobook's chapter files into one `.m4b` with ffmpeg, run by the sync queue. |
+| `devicesyncprogressmodel.{h,cpp}` / `devicesyncprogressview.{h,cpp}` | The sync queue pane under the device tree. |
 | `devicedatabasebackend.{h,cpp}` / `deviceinfo.{h,cpp}` | Persistent device records.                   |
 | `deviceproperties.{h,cpp,ui}` / `devicestatefiltermodel.{h,cpp}` / `deviceview*.{h,cpp,ui}` | UI. |
 | `org.freedesktop.UDisks2.*.xml` / `org.freedesktop.DBus.ObjectManager.xml` | D-Bus interface descriptions. |

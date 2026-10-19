@@ -325,7 +325,7 @@ QString Transcoder::GetFile(const QString &input, const TranscoderPreset &preset
     fileinfo_output.setFile(temp_dir + QLatin1Char('/') + filename);
   }
 
-  // Bug #13 (see .ai/10-ipod-sync.md §10.16): The candidate output path
+  // Bug #13 (see .ai/history/ipod-bug-diary.md §10.16): The candidate output path
   // must be unique against BOTH:
   //   (a) what already exists on disk, AND
   //   (b) what a previous, still-in-flight GetFile() has already handed
@@ -596,7 +596,7 @@ bool Transcoder::event(QEvent *e) {
     // Remove it from the list - this will also destroy the GStreamer pipeline
     current_jobs_.erase(it);
 
-    // Bug #13 (see .ai/10-ipod-sync.md §10.16): Now that the transcode
+    // Bug #13 (see .ai/history/ipod-bug-diary.md §10.16): Now that the transcode
     // is finished, the output file (if the job succeeded) is on disk,
     // so any subsequent GetFile() will see it via `QFileInfo::exists()`
     // and pick a different name. If the job failed, the file may or may

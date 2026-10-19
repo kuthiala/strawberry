@@ -1,41 +1,50 @@
-# AI Reference Documentation for Strawberry Music Player
+# AI Reference for this Strawberry Fork
 
-This directory contains comprehensive documentation designed for AI assistants (and human contributors) working in the Strawberry codebase. Use these documents to quickly understand the project structure, conventions, and where to look for specific functionality.
+Start here. Read only the file(s) the task needs: the table below routes you, the landmines list is the short version of everything this fork learned the hard way.
 
-## How to Use This Directory
+**Fork:** `origin` = `kuthiala/strawberry`, `upstream` = `strawberrymusicplayer/strawberry`. The fork is upstream `master` plus a linear stack of fork commits (iPod sync hardening, sync queue, Claude theme, macOS tooling, these docs); see [`14-fork-maintenance.md`](./14-fork-maintenance.md).
+**Platform this fork is developed on:** macOS (Intel, x86_64), built with `./install-macos.sh` against the upstream deps tarball in `/opt/strawberry_macos_<arch>_release`.
 
-When you are tasked with making changes in this repository, start by reading the documents most relevant to the task:
+## Where to look
 
-| If your task involves...                                  | Start with...                                              |
-| --------------------------------------------------------- | ---------------------------------------------------------- |
-| Understanding the project at a high level                 | [`01-project-overview.md`](./01-project-overview.md)       |
-| Understanding how the application is wired together       | [`02-architecture.md`](./02-architecture.md)               |
-| Building, running, or testing the project                 | [`03-build-and-test.md`](./03-build-and-test.md)           |
-| Following coding style and Qt conventions                 | [`04-coding-conventions.md`](./04-coding-conventions.md)   |
-| Finding a specific module / area of the codebase          | [`05-module-guide.md`](./05-module-guide.md)               |
-| Database schema, songs, and migrations                    | [`06-data-model.md`](./06-data-model.md)                   |
-| Performing common development tasks (adding providers...) | [`07-common-workflows.md`](./07-common-workflows.md)       |
-| Quick keyword/file lookup                                 | [`08-quick-reference.md`](./08-quick-reference.md)         |
-| Glossary / domain terms                                   | [`09-glossary.md`](./09-glossary.md)                       |
-| **Anything iPod-sync related** (libgpod, transcoder, cover art, "No Music.") | [`10-ipod-sync.md`](./10-ipod-sync.md) |
-| **macOS-specific build / install / debug workflow**       | [`11-macos-dev-loop.md`](./11-macos-dev-loop.md)           |
-| **A Strawberry crash log (macOS .ips or our own .log)**   | [`11-macos-dev-loop.md §11.16`](./11-macos-dev-loop.md#1116-crash-logs) — both file locations, one-liner to extract the faulting backtrace, and a worked Bug-#8 example showing exactly how `ktriageinfo` cracked the case. |
+| Task | Read |
+|------|------|
+| What Strawberry is, repo layout | [`01-project-overview.md`](./01-project-overview.md) |
+| How the app is wired (Application, threads, MainWindow) | [`02-architecture.md`](./02-architecture.md) |
+| Building / tests (generic) | [`03-build-and-test.md`](./03-build-and-test.md) |
+| Code style, Qt idioms, commit message format | [`04-coding-conventions.md`](./04-coding-conventions.md) |
+| Finding the module for a feature | [`05-module-guide.md`](./05-module-guide.md), then [`08-quick-reference.md`](./08-quick-reference.md) |
+| Database schema, `Song` | [`06-data-model.md`](./06-data-model.md) |
+| Adding a provider / setting / file / test | [`07-common-workflows.md`](./07-common-workflows.md) |
+| Terms | [`09-glossary.md`](./09-glossary.md) |
+| **Anything iPod** (copy, artwork, playlists, podcasts, audiobooks) | [`10-ipod-sync.md`](./10-ipod-sync.md) — rules + bug index. Full bug write-ups: [`history/ipod-bug-diary.md`](./history/ipod-bug-diary.md) (open only for a matching symptom) |
+| **macOS build / install / crash logs / libgpod fork** | [`11-macos-dev-loop.md`](./11-macos-dev-loop.md) (§11.0 first) |
+| **Copy-to-device queue, sync pane, cancelling** | [`12-sync-queue.md`](./12-sync-queue.md) |
+| **Colours, stylesheet, sidebar look, Appearance settings** | [`13-claude-theme.md`](./13-claude-theme.md) |
+| **Pulling upstream, rebasing, commit layout** | [`14-fork-maintenance.md`](./14-fork-maintenance.md) |
+| iPod diagnostics without Strawberry | [`tools/`](./tools/) |
 
-## TL;DR for AI Agents
+`CLAUDE.md` in the repo root is upstream's generic guide; this directory is the fork-specific layer on top.
 
-- **Project:** Strawberry is a **Qt 6 / C++17** desktop **music player and collection manager**, forked from Clementine in 2018.
-- **Build system:** **CMake** (>= 3.13). Top-level [`CMakeLists.txt`](../CMakeLists.txt) lists every source file explicitly — when you add a `.cpp`/`.h`, you usually need to add it there too.
-- **Entry point:** [`src/main.cpp`](../src/main.cpp) → constructs an [`Application`](../src/core/application.h) → constructs [`MainWindow`](../src/core/mainwindow.h).
-- **Code style:** Heavy use of Qt; **no `foreach`, no `signals`/`slots` keywords** (use `Q_SIGNALS`/`Q_SLOTS`/`Q_EMIT`), **no implicit `QString` ↔ `const char*` casts** (use `u"..."_s` / `"..."_L1`).
-- **Tests:** GoogleTest, in [`tests/`](../tests/), opt-in target `run_strawberry_tests`.
-- **Domain core:** The [`Song`](../src/core/song.h) class is the central data type; the SQLite **schema is in [`data/schema/schema.sql`](../data/schema/schema.sql)** (current version: **23**); migrations live next to it as `schema-NN.sql`.
-- **Modules are organised by feature**, each in its own subdirectory under `src/` (e.g. `collection/`, `playlist/`, `engine/`, `covermanager/`, `lyrics/`).
-- **🛑 macOS-specific landmine:** after `./install-macos.sh clean`, after a first build, or after any deps/CMakeLists link-list change, you **must** run `./install-macos.sh bundle` *before* `install -y`. Skipping it produces a `build/strawberry.app` that crashes within 100 ms on launch with duplicate-QtCore errors — and the crash has nothing to do with whatever C++ change you just made. Full triage at [`11-macos-dev-loop.md §11.15`](./11-macos-dev-loop.md#1115-post-mortem-the-duplicate-qtcore-crash-read-this-first-if-the-app-wont-launch). 2-second verification: `otool -L /Applications/strawberry.app/Contents/MacOS/strawberry | grep /opt/strawberry_macos` must be empty.
-- **🛑 iPod-sync mid-sync SIGSEGV around song ~1,888 + ~20% wrong album covers** were Bug #8 and Bug #9; the root cause was `GPodDevice::CommitCopy` calling `WriteDatabase` (full `itdb_write`) after every song, exhausting VM and corrupting libgpod's in-place `.ithmb` rewriter. The fix throttles CommitCopy to every 50 songs / 30 s, with FinishCopy still flushing unconditionally. Full diagnosis (including a worked .ips post-mortem) at [`10-ipod-sync.md §10.12`](./10-ipod-sync.md#1012-bug-8--bug-9-per-song-writedatabase-crashed-at-1888-songs-and-scrambled-cover-art). If you're chasing a fresh iPod-sync crash and don't know where to start: `cat $(ls -t ~/Library/Logs/Strawberry/strawberry-crash-*.log | head -1)` for the short version, `~/Library/Logs/DiagnosticReports/strawberry-*.ips` for the long one — see [`11-macos-dev-loop.md §11.16`](./11-macos-dev-loop.md#1116-crash-logs).
-- **🛑 iPod-sync crash *still* reproduces after the Bug #8 throttle fix, same stack (`write_mhsd_playlists` → NULL deref), same `mach_vm_allocate_kernel failed` triage** — that's **Bug #11**, not a Bug #8 regression. Root cause is inside libgpod: `wcontents_maybe_expand` grows the write buffer linearly (+1.5 MiB) and does NOT check `g_realloc`, so under macOS libmalloc fragmentation the realloc returns NULL and libgpod NULL-derefs. Two-part fix: (a) `.idea/strawberry-libgpod/src/itdb_itunesdb.c` now uses geometric growth + checked `g_try_realloc`, (b) `src/device/gpoddevice.cpp::WriteDatabase` calls `malloc_zone_pressure_relief` before every `itdb_write` on macOS. Full diagnosis at [`10-ipod-sync.md §10.14`](./10-ipod-sync.md#1014-bug-11-mach_vm_allocate_kernel-failed-at-1886-songs--unchecked-g_realloc-in-libgpod). If you patch libgpod, remember **Bug #12**: `install-macos.sh`'s audit compares the bundle against `/opt/strawberry_macos_*/lib/libgpod.dylib`, NOT against `.idea/strawberry-libgpod/build/libgpod.dylib` — so a fresh `cmake --build` under `.idea/` doesn't propagate to `/Applications/strawberry.app/` until you also `cp` over the `/opt/` copy. Verification one-liner: `strings /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib | grep g_try_realloc` — empty means the deployed dylib is stale.
-- **🕵️ ~20% of albums still show the wrong cover after ALL the above fixes** — the Bug #8/#9 throttling story was wrong. `src/device/gpoddevice.cpp` now emits SHA1-fingerprint `[cover-trace]` lines on both the source-JPEG side (in `CopyToStorage`) and the on-disk `.ithmb`-slot side (post-write scan in `WriteDatabase`); a `QHash<Itdb_Track*, CoverFingerprint>` correlates them per-track. The next sync's log tells you which of four verdicts is true in ~5 min of grep (`upstream_duplicates` > 0 ⇒ Strawberry-side bug in `Organize::ProcessSomeFiles`; `duplicate_slot_sha1s` > 0 with zero upstream dupes ⇒ libgpod ithumb-writer bug; too-few slots ⇒ Bug #4-style silent `pack_*` failure; all counts clean + visual mismatch ⇒ iPod firmware/ArtworkDB bug). Full instructions and grep commands at [`10-ipod-sync.md §10.15`](./10-ipod-sync.md#1015-bug-9-follow-up-cover-misattribution-still-present--fingerprint-based-investigation-loop). Cost: ~200 ms per WriteDatabase and ~2 KB of stdout per song; can stay on all the time until the bug is proven fixed.
-- **📝 Crash log filename change (2026-06-30)** — the on-disk shape is now `strawberry-crash-<ISO-datetime>-<pid>.log` (date+time first for sortable `ls`, PID second), and `CrashReporter::Init()` now auto-prunes anything older than 180 days from `~/Library/Logs/Strawberry/` at process start. Old-format `<pid>-<epoch>` files continue to be recognized and pruned by the same glob. Details in [`10-ipod-sync.md §10.13`](./10-ipod-sync.md#1013-bug-10-per-strawberry-crash-logging) → "Auto-prune retention".
+## Facts that are easy to get wrong
 
-## Important: Keep This Directory Up To Date
+- Qt 6 (≥ 6.4; the macOS deps ship 6.12), C++17, CMake ≥ 3.25. **Every source file is listed in the top-level `CMakeLists.txt`** (`SOURCES`/`HEADERS`, optional features in `if(HAVE_X) list(APPEND …)` blocks; the old `optional_source()` helper no longer exists). New `.ui`/resources: `.ui` files go in the UI list, resources in `data/data.qrc`.
+- Code style: `Q_SIGNALS`/`Q_SLOTS`/`Q_EMIT`, no `foreach`, `u"…"_s` / `"…"_L1` literals, comments are long single lines (one sentence per line). Commit subject `ClassName: Short explanation`.
+- DB schema is version **30** (`data/schema/schema.sql`, migrations `schema-N.sql`).
+- `QString("%1/%2").arg(a).arg(b)` is a bug when `a` can contain `%1`: use one multi-arg `.arg(a, b)`.
 
-If you make significant architectural changes (new module, new provider type, change to the schema, change to build system), please update the relevant document(s) in this directory so future AI sessions stay accurate.
+## Landmines (short version of past incidents)
+
+1. **App crashes within ~100 ms of launch on macOS** → not your code. The bundle references `/opt/...` libs (duplicate QtCore). Run `./install-macos.sh bundle` then `install -y`. Check: `otool -L /Applications/strawberry.app/Contents/MacOS/strawberry | grep /opt/strawberry_macos` must print nothing. [`11 §11.15`](./11-macos-dev-loop.md#1115-post-mortem-the-duplicate-qtcore-crash-read-this-first-if-the-app-wont-launch)
+2. **After pulling upstream, configure fails on a missing package** (e.g. `uchardet`) → the deps tarball is stale: refresh it, then **rebuild the patched libgpod** (the refresh overwrites it), then `clean` + full build. [`11 §11.0`](./11-macos-dev-loop.md#110-what-changed-with-upstream-1231-2026-10)
+3. **libgpod changes don't reach the app** → the install audit compares the bundle with `/opt/.../lib/libgpod.dylib`, not with `.idea/strawberry-libgpod/build/`. Copy the build into `/opt` (Bug #12). Verify the deployed lib: `strings /Applications/strawberry.app/Contents/Frameworks/libgpod.dylib | grep -c g_try_realloc` > 0.
+4. **Source fix "doesn't work"** → check the installed binary is newer than your edit (`ls -la /Applications/strawberry.app/Contents/MacOS/strawberry`); `build` alone doesn't update `/Applications`.
+5. **iPod: never write the iTunesDB per song**, never `itdb_track_remove` directly, always write the DB at the end even after failures, keep SysInfo seeded. All 13 rules: [`10 §10.0`](./10-ipod-sync.md#100-rules-each-one-was-learned-from-a-bug--dont-break-them).
+6. **Never start an `Organize` directly** — enqueue an `OrganizeQueue::JobRequest`. Two Organizes on one iPod deadlock one thread on `db_busy_`, and eject-after unmounts the device under the other. [`12`](./12-sync-queue.md)
+7. **Theme:** no `QSlider` rules and no plain-`QWidget` backgrounds in `claude.css`, no SVGs in stylesheets (no SVG plugin in the macOS deps), `%palette-` roles must be replaced longest-first. [`13 §13.3`](./13-claude-theme.md#133-donts-each-breaks-something)
+8. **Crash triage:** newest Strawberry crash log `ls -t ~/Library/Logs/Strawberry/strawberry-crash-*.log | head -1` (short), macOS report `~/Library/Logs/DiagnosticReports/strawberry-*.ips` (authoritative, look at `ktriageinfo`). [`11 §11.16`](./11-macos-dev-loop.md#1116-crash-logs)
+9. **Upstream may already have fixed your bug** — when rebasing, upstream independently fixed iPod Bugs #5 and #14; their versions were kept. Check `git log upstream/master -- <file>` before re-applying a fork fix. [`14`](./14-fork-maintenance.md)
+
+## Keep this directory current
+
+When you change architecture, add a module, change the build or find a new failure mode: update the matching file here, add a landmine line above if it cost real time, and put long investigations in `history/` rather than in the reference files.
