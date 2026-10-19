@@ -79,6 +79,9 @@
 #ifdef Q_OS_MACOS
 #  include "macosdevicelister.h"
 #endif
+#ifdef Q_OS_WIN32
+#  include "windowsdevicelister.h"
+#endif
 #ifdef HAVE_GPOD
 #  include "gpoddevice.h"
 #endif
@@ -139,6 +142,9 @@ DeviceManager::DeviceManager(const SharedPtr<TaskManager> task_manager,
 #endif
 #ifdef Q_OS_MACOS
   AddLister(new MacOsDeviceLister);
+#endif
+#ifdef Q_OS_WIN32
+  AddLister(new WindowsDeviceLister);
 #endif
 
 #ifdef HAVE_AUDIOCD
