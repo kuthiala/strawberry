@@ -31,40 +31,38 @@
 
 class QLabel;
 class QListView;
+class QModelIndex;
+class QPoint;
+class QToolButton;
 
-// A small widget that lives at the bottom of the Devices sidebar pane and
-// shows the per-song progress of a "Copy to device" sync. The pane is empty
-// (just a "No active sync" placeholder) when nothing is syncing. When a sync
-// starts the list fills with the song titles in the order they will be
-// processed, and each row picks up a green check (or red cross) as the
-// per-song unit of work commits to the device.
+// The sync queue pane at the bottom of the Devices sidebar.
+// Shows every queued, running and finished "Copy to device" job with its songs, and lets the user cancel a job or clear the finished ones.
 class DeviceSyncProgressView : public QWidget {
   Q_OBJECT
 
  public:
   explicit DeviceSyncProgressView(QWidget *parent = nullptr);
 
-  // Plug a model in. Safe to call repeatedly; the previous model is
-  // disconnected. The model is owned by the caller (DeviceManager).
+  // Plug a model in. Safe to call repeatedly; the previous model is disconnected. The model is owned by the caller (DeviceManager).
   void SetModel(DeviceSyncProgressModel *model);
 
  private Q_SLOTS:
-  void HandleSyncStarted(const QString &device_label, const int total);
-  void HandleSongStatusChanged(const int row, const DeviceSyncProgressModel::Status status);
-  void HandleSyncFinished(const int done, const int failed, const int total);
+  void UpdateHeader();
+  void UpdateButtons();
+  void SongRowChanged(const QModelIndex &idx);
+  void ShowContextMenu(const QPoint &pos);
+  void CancelSelectedJob();
+  void ClearFinished();
 
  private:
-  void UpdateHeader(const QString &device_label, const int done, const int failed, const int total, const bool active);
+  quint64 SelectedJobId(bool *active) const;
 
  private:
   DeviceSyncProgressModel *model_;
   QLabel *header_;
+  QToolButton *button_cancel_;
+  QToolButton *button_clear_;
   QListView *list_view_;
-
-  int total_;
-  int done_;
-  int failed_;
-  QString device_label_;
 };
 
 #endif  // DEVICESYNCPROGRESSVIEW_H

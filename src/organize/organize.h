@@ -25,6 +25,7 @@
 #include "config.h"
 
 #include <optional>
+#include <atomic>
 
 #include <QObject>
 #include <QBasicTimer>
@@ -83,6 +84,10 @@ class Organize : public QObject {
 
   void Start();
 
+  // Stops after the song in flight, the songs copied so far are kept and the destination is finished normally.
+  // Can be called from any thread.
+  void Cancel() { cancel_requested_ = true; }
+
   // Returns the innermost of the collection or device directories containing the file, empty directories left by moving it are removed up to that directory.
   // Returns an empty string when none of them contain the file.
   static QString OriginalRoot(const QStringList &roots, const QString &filename);
@@ -130,10 +135,8 @@ class Organize : public QObject {
   void FileCopied(const int database_id);
   void SongPathChanged(const Song &song, const QFileInfo &new_file, const std::optional<int> new_collection_directory_id);
 
-  // Emitted once when Start() is called, with the ordered list of songs that
-  // are about to be processed. Used by the device-sync-progress pane in the
-  // sidebar to populate its checklist.
-  void SyncQueueReady(const SongList &queue);
+  // Emitted when a song is handed to the destination, so the sync queue pane can show which song is copying.
+  void SongSyncStarted(const Song &song);
   // Emitted after each song finishes (success or *final* failure -- i.e. all
   // retries exhausted) so the sidebar pane can mark it with a green check /
   // red cross. Always emitted in the order the songs were processed.
@@ -221,6 +224,7 @@ class Organize : public QObject {
   int task_id_;
   int current_copy_progress_;
   bool finished_;
+  std::atomic<bool> cancel_requested_;
 
   QStringList files_with_errors_;
   QStringList log_;

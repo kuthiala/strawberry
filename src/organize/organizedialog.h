@@ -35,6 +35,7 @@
 #include <QStringList>
 #include <QUrl>
 #include <QPointer>
+#include <QSet>
 #include <QtEvents>
 
 #include "includes/scoped_ptr.h"
@@ -52,7 +53,6 @@ class QCloseEvent;
 class TaskManager;
 class CollectionBackend;
 class CollectionDirectoryModel;
-class DeviceSyncProgressModel;
 class OrganizeErrorDialog;
 class Ui_OrganizeDialog;
 
@@ -89,12 +89,6 @@ class OrganizeDialog : public QDialog {
 
   void SetPlaylist(const QString &playlist);
 
-  // Optional: plug in the global device-sync progress model so that, on
-  // accept(), the per-song progress signals from the active Organize get
-  // wired into it. Only relevant for device destinations; for non-device
-  // destinations passing a model is harmless (signals just won't fire).
-  void SetDeviceSyncProgressModel(DeviceSyncProgressModel *model) { device_sync_progress_model_ = model; }
-
  protected:
   void showEvent(QShowEvent *e) override;
   void closeEvent(QCloseEvent *e) override;
@@ -122,7 +116,7 @@ class OrganizeDialog : public QDialog {
   void InsertTag(const QString &tag);
   void UpdatePreviews();
 
-  void OrganizeFinished(const QStringList &files_with_errors, const QStringList &log, const bool success);
+  void JobFinished(const quint64 id, const QStringList &files_with_errors, const QStringList &log, const bool success);
 
   void AllowExtASCII(const bool checked);
 
@@ -139,9 +133,6 @@ class OrganizeDialog : public QDialog {
   QFuture<SongList> songs_future_;
   SongList songs_;
   Organize::NewSongInfoList new_songs_info_;
-  // Chapter markers for merged audiobooks, keyed by merged `.m4b` local path.
-  // Populated by AudiobookMerger in accept() and forwarded to Organize.
-  QMap<QString, MusicStorage::AudiobookChapterList> audiobook_chapters_;
   quint64 total_size_;
   QString playlist_;
 
@@ -151,10 +142,9 @@ class OrganizeDialog : public QDialog {
 
   QPointer<CollectionDirectoryModel> collection_directory_model_;
   QStringList source_roots_;
-  // Not owned -- set by the caller via SetDeviceSyncProgressModel. nullptr if
-  // no progress pane is interested (e.g. the dialog was constructed for a
-  // collection-side organize).
-  DeviceSyncProgressModel *device_sync_progress_model_;
+  // The OrganizeQueue jobs started by this dialog, their errors are shown when they finish.
+  QSet<quint64> job_ids_;
+  bool queue_connected_;
 };
 
 #endif  // ORGANISEDIALOG_H

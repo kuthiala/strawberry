@@ -898,6 +898,7 @@ set(SOURCES
   src/organize/organizeformatvalidator.cpp
   src/organize/organizesyntaxhighlighter.cpp
   src/organize/organizedialog.cpp
+  src/organize/organizequeue.cpp
   src/organize/organizeerrordialog.cpp
 
   src/transcoder/transcoder.cpp
@@ -1206,6 +1207,7 @@ set(HEADERS
   src/organize/organizeformatvalidator.h
   src/organize/organizesyntaxhighlighter.h
   src/organize/organizedialog.h
+  src/organize/organizequeue.h
   src/organize/organizeerrordialog.h
 
   src/transcoder/transcoder.h

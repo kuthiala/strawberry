@@ -53,7 +53,6 @@
 #include <QShowEvent>
 #include <QCloseEvent>
 #include <QMessageBox>
-#include <QProgressDialog>
 #include <QSettings>
 
 #include "includes/shared_ptr.h"
@@ -68,14 +67,13 @@
 #include "tagreader/tagreaderclient.h"
 #include "collection/collectionbackend.h"
 #include "collection/collectiondirectorymodel.h"
-#include "device/devicesyncprogressmodel.h"
 #include "organize.h"
+#include "organizequeue.h"
 #include "organizeformat.h"
 #include "organizesyntaxhighlighter.h"
 #include "organizedialog.h"
 #include "organizeerrordialog.h"
 #include "dialogs/podcastdetailsdialog.h"
-#include "device/audiobookmerger.h"
 #include "constants/audiobooksettings.h"
 #include "ui_organizedialog.h"
 #include "transcoder/transcoder.h"
@@ -112,7 +110,7 @@ OrganizeDialog::OrganizeDialog(const SharedPtr<TaskManager> task_manager,
       collection_backend_(collection_backend),
       total_size_(0),
       devices_(false),
-      device_sync_progress_model_(nullptr) {
+      queue_connected_(false) {
 
   ui_->setupUi(this);
 
@@ -276,115 +274,46 @@ void OrganizeDialog::accept() {
     podcast_info = dialog.info();
   }
 
-  // Audiobooks: combine every chapter file that belongs to the same book into a
-  // SINGLE .m4b (one chapter marker per source track) BEFORE handing off to the
-  // Organize pipeline. The iPod firmware groups audiobooks by their (album,
-  // album-artist) identity and only shows one representative title per group, so
-  // a book ripped as N chapter files otherwise fragments into N single-chapter
-  // "audiobooks" named after the chapters. Merging to one file per book sidesteps
-  // the grouping entirely: one book == one audiobook with the book's title and
-  // working per-chapter navigation. Lossless stream-copy is used when every input
-  // is already AAC/ALAC-in-MP4; otherwise the book is re-encoded once to AAC.
+  // Audiobooks: every chapter file that belongs to the same book is combined into a SINGLE .m4b (one chapter marker per source track).
+  // The iPod firmware groups audiobooks by their (album, album-artist) identity and only shows one representative title per group, so a book ripped as N chapter files otherwise fragments into N single-chapter "audiobooks".
+  // The merging is done by OrganizeQueue in the job's Preparing phase on a worker thread, so this dialog closes right away and other jobs keep copying.
+  bool merge_audiobooks = false;
   if (media_type == MusicStorage::DeviceMediaType::Audiobook) {
     Settings audiobook_settings;
     audiobook_settings.beginGroup(AudiobookSettings::kSettingsGroup);
-    const bool merge_enabled = audiobook_settings.value(AudiobookSettings::kMergeEnabled, AudiobookSettings::kMergeEnabledDefault).toBool();
+    merge_audiobooks = audiobook_settings.value(AudiobookSettings::kMergeEnabled, AudiobookSettings::kMergeEnabledDefault).toBool();
     audiobook_settings.endGroup();
-
-    // When merging is disabled the user wants chapters synced as-is (legacy
-    // behaviour), so skip the whole combine step.
-    if (merge_enabled) {
-    AudiobookMerger merger(this);
-    merger.SetTagReaderClient(tagreader_client_);
-
-    // Modal progress dialog with Cancel. The merge runs synchronously on this
-    // thread but pumps the event loop (both here between books and inside
-    // AudiobookMerger while ffmpeg runs), so this dialog stays responsive and
-    // its Cancel button actually interrupts an in-flight ffmpeg.
-    QProgressDialog progress(tr("Combining audiobook chapters…"), tr("Cancel"), 0, 0, this);
-    progress.setWindowModality(Qt::WindowModal);
-    progress.setMinimumDuration(0);
-    progress.setAutoClose(false);
-    progress.setAutoReset(false);
-    progress.show();
-
-    merger.SetProgressCallback([&progress](int done, int total, const QString &book_title) {
-      if (total > 0) {
-        progress.setMaximum(total);
-        progress.setValue(done);
-      }
-      progress.setLabelText(tr("Combining audiobook \"%1\" (%2 of %3)…").arg(book_title).arg(qMin(done + 1, total)).arg(total));
-    });
-    merger.SetCancelCallback([&progress]() -> bool { return progress.wasCanceled(); });
-
-    AudiobookMerger::Result merge_result = merger.MergeByBook(new_songs_info_, format_);
-    progress.close();
-
-    if (merge_result.cancelled) {
-      // User aborted: sync nothing.
-      return;
-    }
-
-    if (!merge_result.ok || merge_result.songs_info.isEmpty()) {
-      const QString details = merge_result.errors.join(u'\n');
-      QMessageBox::warning(this, tr("Combine audiobooks"),
-          merge_result.songs_info.isEmpty()
-              ? tr("None of the selected audiobooks could be combined.\n\n%1").arg(details)
-              : tr("Some audiobooks could not be combined and were skipped:\n\n%1").arg(details));
-      if (merge_result.songs_info.isEmpty()) {
-        // Nothing left to sync; abort so we never sync a half-merged book.
-        return;
-      }
-    }
-
-    // Replace the per-chapter selection with one merged book per entry.
-    new_songs_info_ = merge_result.songs_info;
-    audiobook_chapters_ = merge_result.chapters_by_file;
-    }  // if (merge_enabled)
   }
 
-  Organize *organize = new Organize(task_manager_, tagreader_client_, storage, format_, copy, ui_->overwrite->isChecked(), ui_->albumcover->isChecked(), new_songs_info_, original_roots, ui_->eject_after->isChecked(), media_type, podcast_info, playlist_, audiobook_chapters_);
-  QObject::connect(organize, &Organize::Finished, this, &OrganizeDialog::OrganizeFinished);
-  QObject::connect(organize, &Organize::FileCopied, this, &OrganizeDialog::FileCopied);
-  if (collection_backend_) {
-    QObject::connect(organize, &Organize::SongPathChanged, &*collection_backend_, &CollectionBackend::SongPathChanged);
-  }
+  OrganizeQueue::JobRequest request;
+  request.task_manager = task_manager_;
+  request.tagreader_client = tagreader_client_;
+  request.collection_backend = collection_backend_;
+  request.destination = storage;
+  request.destination_label = destination.data(Qt::DisplayRole).toString();
+  request.format = format_;
+  request.copy = copy;
+  request.overwrite = ui_->overwrite->isChecked();
+  request.albumcover = ui_->albumcover->isChecked();
+  request.eject_after = ui_->eject_after->isChecked();
+  request.songs_info = new_songs_info_;
+  request.original_roots = original_roots;
+  request.media_type = media_type;
+  request.podcast_info = podcast_info;
+  request.playlist = playlist_;
+  request.merge_audiobooks = merge_audiobooks;
 
-  // Wire per-song progress signals into the sidebar device-sync-progress
-  // pane. The model lives on the main thread; Organize::Start emits
-  // SyncQueueReady synchronously *before* moving itself to the worker
-  // thread, so connecting before Start() means the queue arrives on the
-  // current thread and populates the pane immediately. Subsequent
-  // SongSyncProgress emissions cross thread boundaries safely via Qt's
-  // queued connection auto-detection.
-  // Fall back to the process-wide singleton (registered by DeviceManager) if
-  // no caller set us explicitly. This lets every OrganizeDialog call site --
-  // mainwindow drag-drop, collection right-click "Copy to ...", playlist
-  // right-click, fileview, deviceview cross-device copy -- show device-sync
-  // progress in the sidebar pane without having to be plumbed.
-  DeviceSyncProgressModel *resolved_model = device_sync_progress_model_ ? device_sync_progress_model_ : DeviceSyncProgressModel::instance();
-  if (resolved_model) {
-    DeviceSyncProgressModel *model = resolved_model;
-    // Use the destination's display name as the friendly device label so
-    // the pane header reads e.g. "Syncing to iPod Classic — 3 / 12 done".
-    const QString device_label = destination.data(Qt::DisplayRole).toString();
-    QObject::connect(organize, &Organize::SyncQueueReady, model, [model, device_label](const SongList &queue) {
-      model->StartSync(device_label, queue);
-    });
-    QObject::connect(organize, &Organize::SongSyncProgress, model, &DeviceSyncProgressModel::SongFinished);
-    // Per-attempt retry annotation. The pane uses this to flip the row
-    // icon to amber and show "[retry N/10 in Xs]" while we wait between
-    // exponential-backoff attempts; SongSyncProgress is only emitted when
-    // the song either succeeds or runs out of retries entirely.
-    QObject::connect(organize, &Organize::SongSyncRetry, model, &DeviceSyncProgressModel::SongRetryScheduled);
-    QObject::connect(organize, &Organize::Finished, model, [model](const QStringList &errors, const QStringList &log) {
-      Q_UNUSED(errors);
-      Q_UNUSED(log);
-      model->EndSync();
-    });
+  // Jobs are queued, so a new copy can be started while another is still running, it starts when the destination is free.
+  OrganizeQueue *queue = OrganizeQueue::instance();
+  if (!queue) {
+    queue = new OrganizeQueue(qApp);
+    OrganizeQueue::SetInstance(queue);
   }
-
-  organize->Start();
+  if (!queue_connected_) {
+    QObject::connect(queue, &OrganizeQueue::JobFinished, this, &OrganizeDialog::JobFinished);
+    queue_connected_ = true;
+  }
+  job_ids_ << queue->Enqueue(request);
 
   QDialog::accept();
 
@@ -736,7 +665,9 @@ void OrganizeDialog::UpdatePreviews() {
 
 }
 
-void OrganizeDialog::OrganizeFinished(const QStringList &files_with_errors, const QStringList &log, const bool success) {
+void OrganizeDialog::JobFinished(const quint64 id, const QStringList &files_with_errors, const QStringList &log, const bool success) {
+
+  if (!job_ids_.remove(id)) return;
 
   // Finishing can fail when all files were copied, for example when writing the device database or removing the originals fails, the error is in the log.
   if (success && files_with_errors.isEmpty()) return;

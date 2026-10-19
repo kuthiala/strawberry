@@ -114,7 +114,8 @@ Organize::Organize(const SharedPtr<TaskManager> task_manager,
       started_(false),
       task_id_(0),
       current_copy_progress_(0),
-      finished_(false) {
+      finished_(false),
+      cancel_requested_(false) {
 
   original_thread_ = thread();
 
@@ -153,17 +154,6 @@ void Organize::Start() {
   task_id_ = task_manager_->StartTask(tr("Organizing files"));
   task_manager_->SetTaskBlocksCollectionScans(task_id_);
 
-  // Publish the ordered queue of songs to anyone listening (the sidebar
-  // device-sync-progress pane in particular). Emitted before we move to the
-  // worker thread so receivers connected with the default AutoConnection
-  // still get the queue synchronously on the main thread.
-  SongList queue;
-  queue.reserve(tasks_pending_.count());
-  for (const Task &task : std::as_const(tasks_pending_)) {
-    queue << task.song_info_.song_;
-  }
-  Q_EMIT SyncQueueReady(queue);
-
   // The thread is deleted in the original thread when it finished, since this can be deleted before the thread finished.
   thread_ = new QThread;
   QObject::connect(thread_, &QThread::started, this, &Organize::ProcessSomeFiles);
@@ -192,6 +182,19 @@ void Organize::ProcessSomeFiles() {
       tasks_pending_.clear();
     }
     started_ = true;
+  }
+
+  // Cancelled: drop the songs which weren't copied yet, then finish normally below, so the destination still writes its database for the songs copied so far.
+  if (cancel_requested_ && !tasks_pending_.isEmpty()) {
+    qLog(Info) << "Organize cancelled," << tasks_pending_.count() << "songs not copied";
+    for (const Task &task : std::as_const(tasks_pending_)) {
+      if (!task.transcoded_filename_.isEmpty()) {
+        QFile::remove(task.transcoded_filename_);
+        transcoder_->ReleaseOutput(task.transcoded_filename_);
+      }
+    }
+    tasks_complete_ += static_cast<int>(tasks_pending_.count());
+    tasks_pending_.clear();
   }
 
   // None left?
@@ -246,7 +249,7 @@ void Organize::ProcessSomeFiles() {
   for (int i = 0; i < kBatchSize; ++i) {
     SetSongProgress(0);
 
-    if (tasks_pending_.isEmpty()) break;
+    if (tasks_pending_.isEmpty() || cancel_requested_) break;
 
     // Scan for the first eligible task. Not-yet-due tasks contribute to
     // earliest_due_ms so the timer re-arm below wakes us exactly when
@@ -432,6 +435,8 @@ void Organize::ProcessSomeFiles() {
                << " cover_source_=" << job.cover_source_
                << " cover_image_.isNull=" << job.cover_image_.isNull()
                << " cover_image_.size=" << job.cover_image_.size();
+
+    Q_EMIT SongSyncStarted(task.song_info_.song_);
 
     QString error_text;
     bool song_succeeded = destination_->CopyToStorage(job, error_text);
@@ -804,6 +809,7 @@ void Organize::FileTranscoded(const QString &input, const QString &output, const
   Task task = tasks_transcoding_.take(input);
   if (!success) {
     files_with_errors_ << input;
+    Q_EMIT SongSyncProgress(task.song_info_.song_, false);
   }
   else {
     tasks_pending_ << task;

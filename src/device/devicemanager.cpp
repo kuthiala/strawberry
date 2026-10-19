@@ -60,6 +60,7 @@
 #include "devicedatabasebackend.h"
 #include "devicestatefiltermodel.h"
 #include "devicesyncprogressmodel.h"
+#include "organize/organizequeue.h"
 #include "deviceinfo.h"
 
 #ifdef HAVE_GIO
@@ -119,14 +120,12 @@ DeviceManager::DeviceManager(const SharedPtr<TaskManager> task_manager,
   connected_devices_model_ = new DeviceStateFilterModel(this);
   connected_devices_model_->setSourceModel(this);
 
-  // Sync-progress model -- owned by us (Qt parent ownership), surfaced via
-  // sync_progress_model() to the device-sync-progress pane in the sidebar
-  // and to OrganizeDialog (which connects the active Organize's per-song
-  // signals into it). Also registered as the process-wide singleton so any
-  // OrganizeDialog call site (collection / playlist / fileview) can find it
-  // without being plumbed with DeviceManager.
-  sync_progress_model_ = new DeviceSyncProgressModel(this);
-  DeviceSyncProgressModel::SetInstance(sync_progress_model_);
+  // The queue every OrganizeDialog hands its "Copy to device" / "Organize files" jobs to.
+  // Registered as the process-wide instance, so every OrganizeDialog call site (collection, playlist, file view, device view) finds it without being plumbed with DeviceManager.
+  // The sync progress model shows the queue in the pane at the bottom of the Devices tab.
+  organize_queue_ = new OrganizeQueue(this);
+  OrganizeQueue::SetInstance(organize_queue_);
+  sync_progress_model_ = new DeviceSyncProgressModel(organize_queue_, this);
 
 // CD devices are detected via the DiskArbitration framework instead on MacOs.
 #if defined(HAVE_AUDIOCD) && !defined(Q_OS_MACOS)

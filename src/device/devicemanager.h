@@ -57,6 +57,7 @@ class ConnectedDevice;
 class DeviceLister;
 class DeviceStateFilterModel;
 class DeviceSyncProgressModel;
+class OrganizeQueue;
 
 class DeviceManager : public SimpleTreeModel<DeviceInfo> {
   Q_OBJECT
@@ -107,6 +108,7 @@ class DeviceManager : public SimpleTreeModel<DeviceInfo> {
   // flight at any time (the DB mutex inside GPodDevice enforces serial
   // access already).
   DeviceSyncProgressModel *sync_progress_model() const { return sync_progress_model_; }
+  OrganizeQueue *organize_queue() const { return organize_queue_; }
 
   // Get info about devices
   int GetDatabaseId(const QModelIndex &idx) const;
@@ -181,6 +183,7 @@ class DeviceManager : public SimpleTreeModel<DeviceInfo> {
 
   DeviceStateFilterModel *connected_devices_model_;
   DeviceSyncProgressModel *sync_progress_model_;
+  OrganizeQueue *organize_queue_;
 
   QIcon not_connected_overlay_;
 

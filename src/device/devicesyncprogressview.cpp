@@ -20,57 +20,77 @@
 
 #include "config.h"
 
-#include <QFrame>
+#include <QAction>
+#include <QHBoxLayout>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QListView>
-#include <QMargins>
+#include <QMenu>
 #include <QObject>
 #include <QSizePolicy>
 #include <QString>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include "organize/organizequeue.h"
 #include "devicesyncprogressmodel.h"
 #include "devicesyncprogressview.h"
+
+using namespace Qt::Literals::StringLiterals;
 
 DeviceSyncProgressView::DeviceSyncProgressView(QWidget *parent)
     : QWidget(parent),
       model_(nullptr),
       header_(new QLabel(this)),
-      list_view_(new QListView(this)),
-      total_(0),
-      done_(0),
-      failed_(0) {
+      button_cancel_(new QToolButton(this)),
+      button_clear_(new QToolButton(this)),
+      list_view_(new QListView(this)) {
 
-  setObjectName(QStringLiteral("DeviceSyncProgressView"));
+  setObjectName(u"DeviceSyncProgressView"_s);
 
-  auto *layout = new QVBoxLayout(this);
-  layout->setContentsMargins(8, 6, 8, 6);
-  layout->setSpacing(4);
+  QVBoxLayout *layout = new QVBoxLayout(this);
+  layout->setContentsMargins(10, 8, 10, 8);
+  layout->setSpacing(6);
 
-  // Subtle separator line at the top so the pane visually splits from the
-  // device tree above when the user has the splitter handle dragged tight.
-  auto *separator = new QFrame(this);
-  separator->setFrameShape(QFrame::HLine);
-  separator->setFrameShadow(QFrame::Sunken);
-  layout->addWidget(separator);
+  QLabel *title = new QLabel(tr("Sync queue"), this);
+  title->setObjectName(u"DeviceSyncProgressTitle"_s);
 
-  header_->setObjectName(QStringLiteral("DeviceSyncProgressHeader"));
-  header_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  button_cancel_->setText(tr("Cancel job"));
+  button_cancel_->setToolTip(tr("Cancel the selected job. A job which is copying stops after the current song, the songs copied so far are kept."));
+  button_cancel_->setAutoRaise(true);
+  button_clear_->setText(tr("Clear finished"));
+  button_clear_->setAutoRaise(true);
+
+  QHBoxLayout *title_layout = new QHBoxLayout;
+  title_layout->setContentsMargins(0, 0, 0, 0);
+  title_layout->addWidget(title);
+  title_layout->addStretch();
+  title_layout->addWidget(button_cancel_);
+  title_layout->addWidget(button_clear_);
+  layout->addLayout(title_layout);
+
+  header_->setObjectName(u"DeviceSyncProgressHeader"_s);
   header_->setWordWrap(true);
   layout->addWidget(header_);
 
-  list_view_->setObjectName(QStringLiteral("DeviceSyncProgressList"));
-  // Read-only: the user is observing progress, not editing.
+  list_view_->setObjectName(u"DeviceSyncProgressList"_s);
   list_view_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  list_view_->setSelectionMode(QAbstractItemView::NoSelection);
-  list_view_->setFocusPolicy(Qt::NoFocus);
+  list_view_->setSelectionMode(QAbstractItemView::SingleSelection);
   list_view_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  list_view_->setUniformItemSizes(true);
+  list_view_->setTextElideMode(Qt::ElideMiddle);
+  // Job rows are two lines and song rows one, so the items aren't uniform.
+  list_view_->setUniformItemSizes(false);
   list_view_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-  layout->addWidget(list_view_, /*stretch=*/1);
+  list_view_->setContextMenuPolicy(Qt::CustomContextMenu);
+  layout->addWidget(list_view_, 1);
 
-  UpdateHeader(QString(), 0, 0, 0, /*active=*/false);
+  QObject::connect(button_cancel_, &QToolButton::clicked, this, &DeviceSyncProgressView::CancelSelectedJob);
+  QObject::connect(button_clear_, &QToolButton::clicked, this, &DeviceSyncProgressView::ClearFinished);
+  QObject::connect(list_view_, &QListView::customContextMenuRequested, this, &DeviceSyncProgressView::ShowContextMenu);
+
+  UpdateHeader();
+  UpdateButtons();
 
 }
 
@@ -84,73 +104,98 @@ void DeviceSyncProgressView::SetModel(DeviceSyncProgressModel *model) {
   list_view_->setModel(model_);
 
   if (model_) {
-    QObject::connect(model_, &DeviceSyncProgressModel::SyncStarted, this, &DeviceSyncProgressView::HandleSyncStarted);
-    QObject::connect(model_, &DeviceSyncProgressModel::SongStatusChanged, this, &DeviceSyncProgressView::HandleSongStatusChanged);
-    QObject::connect(model_, &DeviceSyncProgressModel::SyncFinished, this, &DeviceSyncProgressView::HandleSyncFinished);
-    // Re-seed header in case the model already has rows from a previous sync.
-    UpdateHeader(model_->device_label(), /*done=*/0, /*failed=*/0, model_->rowCount(), model_->is_syncing());
+    QObject::connect(model_, &DeviceSyncProgressModel::SummaryChanged, this, &DeviceSyncProgressView::UpdateHeader);
+    QObject::connect(model_, &DeviceSyncProgressModel::SummaryChanged, this, &DeviceSyncProgressView::UpdateButtons);
+    QObject::connect(model_, &DeviceSyncProgressModel::SongRowChanged, this, &DeviceSyncProgressView::SongRowChanged);
+    QObject::connect(list_view_->selectionModel(), &QItemSelectionModel::currentChanged, this, &DeviceSyncProgressView::UpdateButtons);
   }
-  else {
-    UpdateHeader(QString(), 0, 0, 0, false);
-  }
+
+  UpdateHeader();
+  UpdateButtons();
 
 }
 
-void DeviceSyncProgressView::HandleSyncStarted(const QString &device_label, const int total) {
+void DeviceSyncProgressView::UpdateHeader() {
 
-  device_label_ = device_label;
-  total_ = total;
-  done_ = 0;
-  failed_ = 0;
-  UpdateHeader(device_label_, done_, failed_, total_, /*active=*/true);
-  // Scroll to top so the first song is visible when sync kicks off.
-  if (model_ && model_->rowCount() > 0) {
-    list_view_->scrollToTop();
-  }
+  header_->setText(model_ ? model_->Summary() : tr("No device syncs."));
 
 }
 
-void DeviceSyncProgressView::HandleSongStatusChanged(const int row, const DeviceSyncProgressModel::Status status) {
+quint64 DeviceSyncProgressView::SelectedJobId(bool *active) const {
 
-  switch (status) {
-    case DeviceSyncProgressModel::Status::Done:   ++done_; break;
-    case DeviceSyncProgressModel::Status::Failed: ++failed_; break;
-    default: break;
-  }
-  UpdateHeader(device_label_, done_, failed_, total_, /*active=*/true);
-  // Keep the most recently finished song visible without ripping the user's
-  // scroll position around if they've manually scrolled away.
-  if (model_) {
-    const QModelIndex idx = model_->index(row);
-    if (idx.isValid()) list_view_->scrollTo(idx, QAbstractItemView::EnsureVisible);
-  }
+  *active = false;
+  if (!model_) return 0;
+
+  const QModelIndex idx = list_view_->currentIndex();
+  if (!idx.isValid()) return 0;
+
+  *active = !OrganizeQueue::IsFinalState(static_cast<OrganizeQueue::JobState>(idx.data(DeviceSyncProgressModel::Role_JobState).toInt()));
+  return idx.data(DeviceSyncProgressModel::Role_JobId).toULongLong();
 
 }
 
-void DeviceSyncProgressView::HandleSyncFinished(const int done, const int failed, const int total) {
+void DeviceSyncProgressView::UpdateButtons() {
 
-  done_ = done;
-  failed_ = failed;
-  total_ = total;
-  UpdateHeader(device_label_, done_, failed_, total_, /*active=*/false);
+  bool active = false;
+  SelectedJobId(&active);
+  button_cancel_->setEnabled(active);
 
-}
-
-void DeviceSyncProgressView::UpdateHeader(const QString &device_label, const int done, const int failed, const int total, const bool active) {
-
-  QString text;
-  if (total == 0 && !active) {
-    text = tr("No active device sync.");
-  }
-  else {
-    const QString label = device_label.isEmpty() ? tr("Device") : device_label;
-    if (active) {
-      text = tr("Syncing to %1 — %2 / %3 done").arg(label).arg(done + failed).arg(total);
-    }
-    else {
-      text = tr("Sync to %1 finished — %2 ok, %3 failed").arg(label).arg(done).arg(failed);
+  bool any_finished = false;
+  if (model_ && model_->queue()) {
+    const QList<OrganizeQueue::JobInfo> jobs = model_->queue()->jobs();
+    for (const OrganizeQueue::JobInfo &job : jobs) {
+      if (OrganizeQueue::IsFinalState(job.state)) {
+        any_finished = true;
+        break;
+      }
     }
   }
-  header_->setText(text);
+  button_clear_->setEnabled(any_finished);
+
+}
+
+void DeviceSyncProgressView::SongRowChanged(const QModelIndex &idx) {
+
+  // Keep the song being copied visible, unless the user is looking at something else.
+  if (!list_view_->currentIndex().isValid() && idx.isValid()) {
+    list_view_->scrollTo(idx, QAbstractItemView::EnsureVisible);
+  }
+
+}
+
+void DeviceSyncProgressView::ShowContextMenu(const QPoint &pos) {
+
+  const QModelIndex idx = list_view_->indexAt(pos);
+  if (idx.isValid()) list_view_->setCurrentIndex(idx);
+
+  bool active = false;
+  SelectedJobId(&active);
+
+  QMenu menu(this);
+  QAction *action_cancel = menu.addAction(tr("Cancel job"), this, &DeviceSyncProgressView::CancelSelectedJob);
+  action_cancel->setEnabled(active);
+  QAction *action_clear = menu.addAction(tr("Clear finished jobs"), this, &DeviceSyncProgressView::ClearFinished);
+  action_clear->setEnabled(button_clear_->isEnabled());
+  menu.exec(list_view_->viewport()->mapToGlobal(pos));
+
+}
+
+void DeviceSyncProgressView::CancelSelectedJob() {
+
+  bool active = false;
+  const quint64 id = SelectedJobId(&active);
+  if (id == 0 || !active || !model_ || !model_->queue()) return;
+
+  model_->queue()->Cancel(id);
+
+}
+
+void DeviceSyncProgressView::ClearFinished() {
+
+  if (!model_ || !model_->queue()) return;
+
+  list_view_->setCurrentIndex(QModelIndex());
+  model_->queue()->ClearFinished();
+  UpdateButtons();
 
 }

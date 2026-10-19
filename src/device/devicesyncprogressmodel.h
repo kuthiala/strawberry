@@ -24,112 +24,105 @@
 #include "config.h"
 
 #include <QAbstractListModel>
+#include <QHash>
 #include <QIcon>
 #include <QList>
+#include <QPointer>
 #include <QString>
 #include <QVariant>
 
 #include "core/song.h"
+#include "organize/organizequeue.h"
 
-// A simple list-model that tracks the per-song progress of a "Copy to device"
-// (i.e. Organize) sync. It exists so the device-sync-progress pane in the
-// sidebar can show a green check next to each song that has been durably
-// committed to the device, and the user can tell at a glance how far through
-// the queue the sync got before any failure. Lives on the main thread and is
-// owned by DeviceManager.
+// List model of the sync queue shown in the pane at the bottom of the Devices sidebar.
+//
+// Every OrganizeQueue job is one header row (title, destination, state, done / total) followed by one row per song.
+// Each song row picks up a green check once the song is durably committed to the device, a red cross when it failed after all retries, and an amber "retry N/M in Xs" while it waits between attempts.
+// Lives on the main thread, owned by DeviceManager, and only reads from the queue.
 class DeviceSyncProgressModel : public QAbstractListModel {
   Q_OBJECT
 
  public:
   enum class Status {
-    Pending,    // queued but not yet attempted
-    InProgress, // currently being transcoded/copied
-    Retrying,   // last attempt failed; waiting for the next attempt
-    Done,       // CopyToStorage + CommitCopy succeeded
-    Failed,     // CopyToStorage or CommitCopy reported an error after all retries
+    Pending,     // queued but not yet attempted
+    InProgress,  // currently being transcoded/copied
+    Retrying,    // last attempt failed; waiting for the next attempt
+    Done,        // CopyToStorage + CommitCopy succeeded
+    Failed,      // CopyToStorage or CommitCopy reported an error after all retries
+    Skipped,     // the job was cancelled before this song was copied
   };
 
   enum Role {
     Role_Status = Qt::UserRole + 1,
+    Role_IsJob,
+    Role_JobId,
+    Role_JobState,
   };
 
-  explicit DeviceSyncProgressModel(QObject *parent = nullptr);
+  explicit DeviceSyncProgressModel(OrganizeQueue *queue, QObject *parent = nullptr);
+
+  OrganizeQueue *queue() const { return queue_; }
 
   // QAbstractListModel
   int rowCount(const QModelIndex &parent = QModelIndex()) const override;
   QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
 
-  // Public API used by the OrganizeDialog wiring.
-
-  // Called once when a sync starts. Replaces any existing queue. label_prefix
-  // is shown as a fake first row separator if non-empty (we currently use
-  // device friendly name like "iPod Classic"). Each Song's title (falling
-  // back to basefilename) becomes one row marked Pending.
-  void StartSync(const QString &device_label, const SongList &queue);
-
-  // Called after each song finishes (success or final failure -- i.e. all
-  // retries exhausted) in the same order as the queue passed to StartSync.
-  // song is used purely as a sanity check against the row title; if it does
-  // not match we still advance.
-  void SongFinished(const Song &song, const bool success);
-
-  // Called when a song failed an individual attempt but is being re-queued
-  // for another try. attempt is 1-based (1 = first failure, 2 = second, ...).
-  // max_attempts is the total cap (e.g. 10). delay_ms is the wall-clock wait
-  // before the next attempt will start. The row is annotated with a
-  // "[retry N/M in Xs]" suffix and its status set to Retrying so the user
-  // can distinguish a paused-for-retry song from a still-pending one. The
-  // next_song_index_ cursor is NOT advanced; the row stays "current" until
-  // it either succeeds (SongFinished true) or finally fails.
-  void SongRetryScheduled(const Song &song, const int attempt, const int max_attempts, const qint64 delay_ms);
-
-  // Called when the entire sync ends. Does not clear the rows -- the user
-  // typically wants to scroll back and see which songs failed -- but does
-  // emit syncFinished() so the view can de-emphasise the header.
-  void EndSync();
-
-  // True iff there is a sync in progress (between StartSync and EndSync).
-  bool is_syncing() const { return syncing_; }
-
-  // Friendly name of the device being synced (empty if no sync in flight).
-  QString device_label() const { return device_label_; }
-
-  // Process-wide singleton accessor. DeviceManager registers itself in its
-  // constructor; OrganizeDialog reads it on accept() so all four OrganizeDialog
-  // call sites (mainwindow / collectionview / fileview / playlistlistcontainer
-  // / deviceview) get device-sync-pane progress for free, without having to
-  // be plumbed with DeviceManager. Returns nullptr if no DeviceManager has
-  // been constructed yet, which is correct for unit tests and headless tools.
-  static DeviceSyncProgressModel *instance();
-  static void SetInstance(DeviceSyncProgressModel *model);
+  // One line summarising the whole queue, for the pane header.
+  QString Summary() const;
 
  Q_SIGNALS:
-  void SyncStarted(const QString &device_label, const int total);
-  void SongStatusChanged(const int row, const Status status);
-  void SyncFinished(const int done, const int failed, const int total);
+  void SummaryChanged();
+  // A song row changed state, the view keeps it visible.
+  void SongRowChanged(const QModelIndex &idx);
 
  private:
-  struct Row {
+  struct SongRow {
     QString title;
-    Status status;
-    // Optional retry annotation. Stored on the row so the view can render
-    // it as a suffix and a tooltip without re-querying Organize. attempt
-    // is 0 when no retry is in flight.
+    QString url;
+    Status status = Status::Pending;
+    // Retry annotation, attempt is 0 when no retry is in flight.
     int retry_attempt = 0;
     int retry_max = 0;
     qint64 retry_delay_ms = 0;
   };
 
-  QList<Row> rows_;
+  struct JobBlock {
+    OrganizeQueue::JobInfo info;
+    QList<SongRow> songs;
+  };
+
+  static QList<SongRow> SongRows(const SongList &songs);
+  static QString SongTitle(const Song &song);
+
+  int JobPosition(const quint64 id) const;
+  int JobFirstRow(const int position) const;
+  // Finds the job and song for a flat row, song is -1 for the job header row.
+  bool Locate(const int row, int *position, int *song) const;
+  // The first song row of the job for this song which isn't final yet.
+  int FindSong(const JobBlock &block, const Song &song) const;
+  void SongChanged(const int position, const int song);
+
+  void JobAdded(const quint64 id, const SongList &songs);
+  void JobSongsChanged(const quint64 id, const SongList &songs);
+  void JobChanged(const quint64 id);
+  void JobRemoved(const quint64 id);
+  void SongStarted(const quint64 id, const Song &song);
+  void SongFinished(const quint64 id, const Song &song, const bool success);
+  void SongRetry(const quint64 id, const Song &song, const int attempt, const int max_attempts, const qint64 delay_ms);
+
+  QIcon JobIcon(const OrganizeQueue::JobState state) const;
+  QIcon SongIcon(const Status status) const;
+
+ private:
+  QPointer<OrganizeQueue> queue_;
+  QList<JobBlock> jobs_;
+
   QIcon icon_pending_;
+  QIcon icon_active_;
   QIcon icon_retrying_;
   QIcon icon_done_;
   QIcon icon_failed_;
-  QString device_label_;
-  bool syncing_;
-  int next_song_index_;
-  int done_count_;
-  int failed_count_;
+  QIcon icon_skipped_;
 };
 
 #endif  // DEVICESYNCPROGRESSMODEL_H
