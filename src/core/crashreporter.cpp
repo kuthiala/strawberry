@@ -180,8 +180,10 @@ void SafeZeroPad(unsigned int value, char *buf, size_t width) {
 }
 
 // Async-signal-safe `write` wrapper that ignores short writes / EINTR.
+// Windows has no POSIX write(2) and OpenCrashLogFd() never returns a descriptor there, so this is a no-op.
 void SafeWrite(int fd, const char *s, size_t n) {
   if (fd < 0 || s == nullptr || n == 0) return;
+#ifdef Q_OS_UNIX
   ssize_t written = 0;
   while (n > 0) {
     written = write(fd, s, n);
@@ -192,6 +194,7 @@ void SafeWrite(int fd, const char *s, size_t n) {
     s += written;
     n -= static_cast<size_t>(written);
   }
+#endif
 }
 
 void SafeWriteCStr(int fd, const char *s) {
@@ -277,8 +280,12 @@ const char *SignalName(int signum) {
     case SIGABRT: return "SIGABRT (aborted)\n";
     case SIGFPE:  return "SIGFPE (arithmetic error)\n";
     case SIGILL:  return "SIGILL (illegal instruction)\n";
+#ifdef SIGBUS
     case SIGBUS:  return "SIGBUS (bus error)\n";
+#endif
+#ifdef SIGPIPE
     case SIGPIPE: return "SIGPIPE (broken pipe)\n";
+#endif
     default:      return "(unknown signal)\n";
   }
 }
@@ -327,8 +334,10 @@ extern "C" void HandleFatalSignal(int signum) {
 
     SafeWriteCStr(fd, kFooterBanner);
 
+#ifdef Q_OS_UNIX
     (void)fsync(fd);
     (void)close(fd);
+#endif
   }
 
   signal(signum, SIG_DFL);
