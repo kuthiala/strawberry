@@ -55,6 +55,7 @@
 #include "core/iconloader.h"
 #include "core/stylehelper.h"
 #include "core/settings.h"
+#include "core/claudetheme.h"
 #include "core/appearance.h"
 #include "widgets/fancytabwidget.h"
 #include "settingspage.h"
@@ -92,6 +93,8 @@ AppearanceSettingsPage::AppearanceSettingsPage(SettingsDialog *dialog, SharedPtr
   ui_->combobox_background_image_position->setItemData(4, static_cast<int>(BackgroundImagePosition::BottomRight));
 
   QObject::connect(ui_->checkbox_dark_mode, &QCheckBox::toggled, this, &AppearanceSettingsPage::DarkModeToggled);
+  QObject::connect(ui_->combobox_theme, &QComboBox::currentIndexChanged, this, &AppearanceSettingsPage::ThemeChanged);
+  QObject::connect(ui_->combobox_theme, &QComboBox::currentIndexChanged, this, &AppearanceSettingsPage::set_changed);
 
   QObject::connect(ui_->use_custom_color_set, &QRadioButton::toggled, this, &AppearanceSettingsPage::UseCustomColorSetOptionChanged);
   QObject::connect(ui_->use_custom_color_set, &QRadioButton::toggled, ui_->widget_custom_colors, &QWidget::setEnabled);
@@ -142,6 +145,9 @@ void AppearanceSettingsPage::Load() {
 
   Settings s;
   s.beginGroup(kSettingsGroup);
+
+  // Theme
+  ui_->combobox_theme->setCurrentIndex(s.value(kTheme, QLatin1String(kDefaultTheme)).toString() == QLatin1String(kThemeClassic) ? 1 : 0);
 
   // Style
   original_style_ = QApplication::style() ? QApplication::style()->objectName() : QString();
@@ -265,6 +271,8 @@ void AppearanceSettingsPage::Load() {
   QObject::connect(ui_->combobox_style, &QComboBox::currentIndexChanged, this, &AppearanceSettingsPage::StyleChanged);
   InitStyle(ui_->combobox_style->currentIndex());
 
+  ThemeChanged(ui_->combobox_theme->currentIndex());
+
 }
 
 void AppearanceSettingsPage::Save() {
@@ -359,9 +367,23 @@ void AppearanceSettingsPage::Save() {
   s.setValue(kIconSizeLeftPanelButtons, ui_->spinbox_icon_size_left_panel_buttons->value());
   s.setValue(kIconSizeConfigureButtons, ui_->spinbox_icon_size_configure_buttons->value());
 
+  // Theme, applied last since saving the style and colors above resets the palette.
+  const bool claude_theme = ui_->combobox_theme->currentIndex() == 0;
+  s.setValue(kTheme, QLatin1String(claude_theme ? kThemeClaude : kThemeClassic));
+
   s.endGroup();
 
   appearance_->set_system_palette(system_palette_);
+
+  if (claude_theme) {
+    ClaudeTheme::Apply();
+  }
+  else if (ClaudeTheme::IsActive()) {
+    ClaudeTheme::Remove(selected_style);
+    if (use_custom_color_set) {
+      ApplyCustomColors();
+    }
+  }
 
 }
 
@@ -386,6 +408,28 @@ void AppearanceSettingsPage::Cancel() {
   background_image_filename_ = original_background_image_filename_;
   current_tabbar_bg_color_ = original_tabbar_bg_color_;
   current_playlist_playing_song_color_ = original_playlist_playing_song_color_;
+
+  // The previews above reset the palette, put the theme back.
+  if (ClaudeTheme::IsActive()) {
+    ClaudeTheme::Apply();
+  }
+
+}
+
+void AppearanceSettingsPage::ThemeChanged(const int index) {
+
+  // The Claude theme brings its own style, colours and sidebar, these are only used by the classic theme.
+  const bool classic = index == 1;
+  ui_->label_style->setEnabled(classic);
+  ui_->combobox_style->setEnabled(classic);
+  ui_->groupbox_tabbar_colors->setEnabled(classic);
+  if (classic) {
+    InitStyle(ui_->combobox_style->currentIndex());
+  }
+  else {
+    ui_->groupbox_colors->setEnabled(false);
+    ui_->checkbox_dark_mode->setEnabled(true);
+  }
 
 }
 

@@ -104,6 +104,7 @@
 #endif
 
 #include "core/iconloader.h"
+#include "core/claudetheme.h"
 #include "core/commandlineoptions.h"
 #include "core/networkproxyfactory.h"
 
@@ -288,6 +289,11 @@ int main(int argc, char *argv[]) {
 #endif
 
   IconLoader::Init();
+
+  // The Claude theme (the default) replaces the style and palette chosen above, it needs the resources for its stylesheet.
+  if (ClaudeTheme::IsEnabledInSettings()) {
+    ClaudeTheme::Apply();
+  }
 
 #ifdef HAVE_TRANSLATIONS
 

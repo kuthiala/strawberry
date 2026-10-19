@@ -46,6 +46,7 @@
 #include "fancytabdata.h"
 #include "utilities/colorutils.h"
 #include "core/stylehelper.h"
+#include "core/claudetheme.h"
 #include "core/settings.h"
 #include "constants/appearancesettings.h"
 
@@ -315,6 +316,14 @@ void FancyTabWidget::paintEvent(QPaintEvent *pe) {
   QStylePainter painter(this);
   QRect backgroundRect = rect();
   backgroundRect.setWidth(tabBar()->width());
+
+  // The Claude theme has a flat sidebar with a hairline next to the content.
+  if (ClaudeTheme::IsActive()) {
+    painter.fillRect(backgroundRect, ClaudeTheme::colors().sidebar);
+    painter.setPen(ClaudeTheme::colors().border);
+    painter.drawLine(backgroundRect.topRight(), backgroundRect.bottomRight());
+    return;
+  }
 
   QString key = QString::asprintf("mh_vertical %d %d %d %d %d", backgroundRect.width(), backgroundRect.height(), bg_color_.rgb(), (bg_gradient_ ? 1 : 0), (background_pixmap_.isNull() ? 0 : 1));
 

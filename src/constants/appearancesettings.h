@@ -41,6 +41,10 @@ enum class BackgroundImagePosition {
 };
 
 constexpr char kStyle[] = "style";
+// "claude" or "classic", see ClaudeTheme.
+constexpr char kTheme[] = "theme";
+constexpr char kThemeClaude[] = "claude";
+constexpr char kThemeClassic[] = "classic";
 constexpr char kSystemThemeIcons[] = "system_icons";
 constexpr char kDarkMode[] = "dark_mode";
 constexpr char kUseCustomColorSet[] = "use-custom-color-set";
@@ -82,6 +86,7 @@ constexpr char kIconSizePlaylistButtons[] = "icon_size_playlist_buttons";
 constexpr char kIconSizeLeftPanelButtons[] = "icon_size_left_panel_buttons";
 constexpr char kIconSizeConfigureButtons[] = "icon_size_configure_buttons";
 
+constexpr char kDefaultTheme[] = "claude";
 constexpr bool kDefaultDarkMode = false;
 constexpr bool kDefaultSystemIcons = false;
 constexpr bool kDefaultUseCustomColorSet = false;

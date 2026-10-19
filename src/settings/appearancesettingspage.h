@@ -56,6 +56,7 @@ class AppearanceSettingsPage : public SettingsPage {
 
  private Q_SLOTS:
   void StyleChanged(const int index);
+  void ThemeChanged(const int index);
   void DarkModeToggled(const bool checked);
   void UseCustomColorSetOptionChanged(const bool checked);
   void SetDarkColors();

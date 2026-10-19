@@ -29,6 +29,7 @@
 
 #include "settings.h"
 #include "appearance.h"
+#include "claudetheme.h"
 #include "constants/appearancesettings.h"
 
 Appearance::Appearance(QObject *parent) : QObject(parent), system_palette_(QApplication::palette()) {}
@@ -104,6 +105,9 @@ const QMap<QPalette::ColorRole, QColor> &Appearance::DarkColors() {
 }
 
 void Appearance::LoadCustomPaletteColors() {
+
+  // The Claude theme has its own palette.
+  if (ClaudeTheme::IsActive()) return;
 
   Settings s;
   s.beginGroup(AppearanceSettings::kSettingsGroup);

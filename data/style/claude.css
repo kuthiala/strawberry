@@ -1,0 +1,544 @@
+/*
+ * Claude theme -- application stylesheet.
+ *
+ * Loaded by ClaudeTheme (src/core/claudetheme.cpp), which fills in the
+ * double-brace token placeholders from its light or dark design tokens and applies
+ * the result with qApp->setStyleSheet() on top of the Fusion style and the
+ * matching QPalette. Keep every colour a token, so both schemes stay in sync.
+ *
+ * Deliberately NOT styled here:
+ *  - QSlider: a stylesheet rule replaces the style of the slider, which
+ *    breaks the moodbar / waveform proxy styles of the track slider. Fusion
+ *    draws sliders from the palette instead.
+ *  - Backgrounds of plain QWidget: custom painted widgets (playlist
+ *    background image, context view, analyzer) draw their own.
+ *  - The FancyTabBar sidebar: it paints itself, see FancyTabBar::paintEvent.
+ */
+
+/* ---------- Base ---------- */
+
+QMainWindow, QDialog {
+  background-color: {{window}};
+}
+
+QMainWindow::separator {
+  background: {{border}};
+  width: 1px;
+  height: 1px;
+}
+
+QToolTip {
+  background-color: {{tooltip}};
+  color: {{tooltip_text}};
+  border: none;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+QLabel:disabled {
+  color: {{text_disabled}};
+}
+
+/* ---------- Buttons ---------- */
+
+QPushButton {
+  background-color: {{raised}};
+  color: {{text}};
+  border: 1px solid {{border_strong}};
+  border-radius: 8px;
+  padding: 5px 14px;
+  min-height: 18px;
+}
+
+QPushButton:hover {
+  background-color: {{hover}};
+}
+
+QPushButton:pressed {
+  background-color: {{selected}};
+  border-color: {{accent}};
+}
+
+QPushButton:focus {
+  border-color: {{accent}};
+}
+
+QPushButton:default {
+  background-color: {{accent}};
+  border-color: {{accent}};
+  color: {{accent_text}};
+}
+
+QPushButton:default:hover {
+  background-color: {{accent_hover}};
+  border-color: {{accent_hover}};
+}
+
+QPushButton:disabled {
+  background-color: {{window}};
+  border-color: {{border}};
+  color: {{text_disabled}};
+}
+
+QPushButton::menu-indicator {
+  subcontrol-origin: padding;
+  subcontrol-position: center right;
+  right: 6px;
+}
+
+QToolButton {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 3px;
+}
+
+QToolButton:hover {
+  background-color: {{hover}};
+}
+
+QToolButton:pressed, QToolButton:checked {
+  background-color: {{selected}};
+}
+
+QToolButton:disabled {
+  color: {{text_disabled}};
+}
+
+/* ---------- Text inputs ---------- */
+
+QLineEdit, QAbstractSpinBox, QDateTimeEdit, QTextEdit, QPlainTextEdit {
+  background-color: {{surface}};
+  color: {{text}};
+  border: 1px solid {{border_strong}};
+  border-radius: 8px;
+  padding: 4px 8px;
+  selection-background-color: {{selected}};
+  selection-color: {{text}};
+}
+
+QTextEdit, QPlainTextEdit {
+  padding: 2px;
+}
+
+QLineEdit:focus, QAbstractSpinBox:focus, QTextEdit:focus, QPlainTextEdit:focus {
+  border: 1px solid {{accent}};
+}
+
+QLineEdit:disabled, QAbstractSpinBox:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {
+  background-color: {{window}};
+  color: {{text_disabled}};
+  border-color: {{border}};
+}
+
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
+  border: none;
+  background: transparent;
+  width: 16px;
+}
+
+QAbstractSpinBox::up-arrow {
+  image: url(:/style/claude/chevron-up-{{scheme}}.png);
+  width: 10px;
+  height: 10px;
+}
+
+QAbstractSpinBox::down-arrow {
+  image: url(:/style/claude/chevron-down-{{scheme}}.png);
+  width: 10px;
+  height: 10px;
+}
+
+/* ---------- Combo boxes ---------- */
+
+QComboBox {
+  background-color: {{raised}};
+  color: {{text}};
+  border: 1px solid {{border_strong}};
+  border-radius: 8px;
+  padding: 4px 28px 4px 10px;
+  min-height: 18px;
+}
+
+QComboBox:hover {
+  background-color: {{hover}};
+}
+
+QComboBox:focus, QComboBox:on {
+  border-color: {{accent}};
+}
+
+QComboBox:editable {
+  background-color: {{surface}};
+}
+
+QComboBox:disabled {
+  background-color: {{window}};
+  color: {{text_disabled}};
+  border-color: {{border}};
+}
+
+QComboBox::drop-down {
+  subcontrol-origin: padding;
+  subcontrol-position: center right;
+  width: 24px;
+  border: none;
+  background: transparent;
+}
+
+QComboBox::down-arrow {
+  image: url(:/style/claude/chevron-down-{{scheme}}.png);
+  width: 10px;
+  height: 10px;
+}
+
+QComboBox QAbstractItemView {
+  background-color: {{surface}};
+  border: 1px solid {{border}};
+  border-radius: 8px;
+  padding: 4px;
+  outline: 0;
+  selection-background-color: {{selected}};
+  selection-color: {{text}};
+}
+
+/* ---------- Check boxes and radio buttons ---------- */
+
+QCheckBox, QRadioButton {
+  spacing: 8px;
+}
+
+QCheckBox:disabled, QRadioButton:disabled {
+  color: {{text_disabled}};
+}
+
+/* ---------- Group boxes ---------- */
+
+QGroupBox {
+  border: 1px solid {{border}};
+  border-radius: 10px;
+  margin-top: 14px;
+  padding: 12px 10px 8px 10px;
+  background-color: {{surface}};
+}
+
+QGroupBox::title {
+  subcontrol-origin: margin;
+  subcontrol-position: top left;
+  left: 10px;
+  padding: 0 4px;
+  color: {{text_secondary}};
+  font-weight: 600;
+}
+
+QGroupBox::indicator {
+  width: 14px;
+  height: 14px;
+}
+
+/* ---------- Menus ---------- */
+
+QMenu {
+  background-color: {{surface}};
+  color: {{text}};
+  border: 1px solid {{border}};
+  border-radius: 10px;
+  padding: 5px;
+}
+
+QMenu::item {
+  padding: 5px 24px 5px 10px;
+  border-radius: 6px;
+  background: transparent;
+}
+
+QMenu::item:selected {
+  background-color: {{selected}};
+  color: {{text}};
+}
+
+QMenu::item:disabled {
+  color: {{text_disabled}};
+}
+
+QMenu::separator {
+  height: 1px;
+  background: {{border}};
+  margin: 4px 8px;
+}
+
+QMenu::icon {
+  padding-left: 6px;
+}
+
+QMenuBar {
+  background-color: {{window}};
+  border-bottom: 1px solid {{border}};
+}
+
+QMenuBar::item {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: transparent;
+}
+
+QMenuBar::item:selected {
+  background-color: {{hover}};
+}
+
+/* ---------- Item views ---------- */
+
+QAbstractItemView {
+  background-color: {{surface}};
+  alternate-background-color: {{surface_alt}};
+  color: {{text}};
+  border: 1px solid {{border}};
+  outline: 0;
+  selection-background-color: {{selected}};
+  selection-color: {{text}};
+}
+
+/* The views of the main window sit flush in their panes, only dialogs frame them. */
+QMainWindow QAbstractItemView {
+  border: none;
+}
+
+QAbstractItemView:disabled {
+  color: {{text_disabled}};
+}
+
+QAbstractItemView::item {
+  padding: 2px 4px;
+  border: none;
+}
+
+QAbstractItemView::item:hover {
+  background-color: {{hover}};
+}
+
+QAbstractItemView::item:selected {
+  background-color: {{selected}};
+  color: {{text}};
+}
+
+QTreeView::branch {
+  background: transparent;
+}
+
+QTreeView::branch:selected {
+  background-color: {{selected}};
+}
+
+QListView#DeviceSyncProgressList::item {
+  padding: 3px 4px;
+}
+
+QHeaderView {
+  background-color: {{surface}};
+  border: none;
+}
+
+QHeaderView::section {
+  background-color: {{surface}};
+  color: {{text_secondary}};
+  border: none;
+  border-bottom: 1px solid {{border}};
+  border-right: 1px solid {{border}};
+  padding: 5px 8px;
+  font-weight: 600;
+}
+
+QHeaderView::section:last {
+  border-right: none;
+}
+
+QHeaderView::section:hover {
+  background-color: {{hover}};
+  color: {{text}};
+}
+
+QTableCornerButton::section {
+  background-color: {{surface}};
+  border: none;
+}
+
+/* ---------- Tabs (plain tab widgets, the sidebar paints itself) ---------- */
+
+QTabWidget::pane {
+  border: 1px solid {{border}};
+  border-radius: 10px;
+  top: -1px;
+  background-color: {{window}};
+}
+
+QTabBar {
+  qproperty-drawBase: 0;
+}
+
+QTabBar::tab {
+  background: transparent;
+  color: {{text_secondary}};
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 12px;
+  margin-right: 2px;
+}
+
+QTabBar::tab:hover {
+  color: {{text}};
+}
+
+QTabBar::tab:selected {
+  color: {{text}};
+  border-bottom: 2px solid {{accent}};
+}
+
+QTabBar::tab:disabled {
+  color: {{text_disabled}};
+}
+
+QTabBar::close-button {
+  image: url(:/style/claude/close-{{scheme}}.png);
+  subcontrol-position: right;
+  border-radius: 4px;
+  padding: 2px;
+  margin-left: 2px;
+}
+
+QTabBar::close-button:hover {
+  background-color: {{hover}};
+}
+
+/* ---------- Scroll bars ---------- */
+
+QScrollBar:vertical {
+  background: transparent;
+  width: 12px;
+  margin: 2px;
+}
+
+QScrollBar:horizontal {
+  background: transparent;
+  height: 12px;
+  margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+  background: {{scrollbar}};
+  border-radius: 4px;
+  min-height: 32px;
+  margin: 0 2px;
+}
+
+QScrollBar::handle:horizontal {
+  background: {{scrollbar}};
+  border-radius: 4px;
+  min-width: 32px;
+  margin: 2px 0;
+}
+
+QScrollBar::handle:hover {
+  background: {{scrollbar_hover}};
+}
+
+QScrollBar::add-line, QScrollBar::sub-line {
+  width: 0;
+  height: 0;
+  border: none;
+  background: none;
+}
+
+QScrollBar::add-page, QScrollBar::sub-page {
+  background: none;
+}
+
+QAbstractScrollArea::corner {
+  background: transparent;
+}
+
+/* ---------- Progress ---------- */
+
+QProgressBar {
+  background-color: {{hover}};
+  color: {{text}};
+  border: none;
+  border-radius: 5px;
+  text-align: center;
+  min-height: 10px;
+}
+
+QProgressBar::chunk {
+  background-color: {{accent}};
+  border-radius: 5px;
+}
+
+/* ---------- Splitters, tool and status bars ---------- */
+
+QSplitter::handle {
+  background: transparent;
+}
+
+QSplitter::handle:hover {
+  background: {{selected}};
+}
+
+QSplitter::handle:horizontal {
+  width: 4px;
+}
+
+QSplitter::handle:vertical {
+  height: 4px;
+}
+
+QToolBar {
+  background-color: {{window}};
+  border: none;
+  spacing: 4px;
+  padding: 2px;
+}
+
+QStatusBar {
+  background-color: {{window}};
+  color: {{text_secondary}};
+  border-top: 1px solid {{border}};
+}
+
+QStatusBar::item {
+  border: none;
+}
+
+QSizeGrip {
+  width: 12px;
+  height: 12px;
+}
+
+/* ---------- Strawberry widgets ---------- */
+
+/* The list in the sync queue pane at the bottom of the Devices tab. */
+#DeviceSyncProgressView {
+  background-color: {{sidebar}};
+  border-top: 1px solid {{border}};
+}
+
+#DeviceSyncProgressTitle {
+  color: {{text}};
+  font-weight: 600;
+}
+
+#DeviceSyncProgressHeader {
+  color: {{text_secondary}};
+}
+
+#DeviceSyncProgressList {
+  background-color: {{surface}};
+}
+
+/* The playlist tab bar above the playlist. */
+PlaylistTabBar::tab {
+  padding: 6px 14px;
+}
+
+/* The lyrics, artist bio and context texts. */
+QTextBrowser {
+  border: none;
+  background-color: {{surface}};
+}

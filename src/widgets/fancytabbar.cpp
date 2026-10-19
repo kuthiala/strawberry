@@ -33,6 +33,7 @@
 #include <QPen>
 
 #include "core/stylehelper.h"
+#include "core/claudetheme.h"
 #include "fancytabbar.h"
 #include "fancytabwidget.h"
 #include "fancytabdata.h"
@@ -172,11 +173,31 @@ void FancyTabBar::paintEvent(QPaintEvent *pe) {
 
   QStylePainter p(this);
 
+  // The Claude theme paints flat: a soft rounded pill with an accent mark for the selected tab, a quieter pill on hover, and no gradients, bevels or text shadows.
+  const bool claude_theme = ClaudeTheme::IsActive();
+
   for (int index = 0; index < count(); ++index) {
     const bool selected = tabWidget->currentIndex() == index;
     QRect tabrect = tabRect(index);
     QRect selectionRect = tabrect;
-    if (selected) {
+    if (claude_theme) {
+      const bool hover = index == mouseHoverTabIndex && isTabEnabled(index);
+      if (selected || hover) {
+        const ClaudeTheme::Colors &colors = ClaudeTheme::colors();
+        const QRectF pill = QRectF(selectionRect).adjusted(6, 2, -6, -2);
+        p.save();
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen);
+        p.setBrush(selected ? colors.selected : colors.hover);
+        p.drawRoundedRect(pill, 8, 8);
+        if (selected) {
+          p.setBrush(colors.accent);
+          p.drawRoundedRect(QRectF(pill.left() - 4, pill.top() + pill.height() * 0.3, 3, pill.height() * 0.4), 1.5, 1.5);
+        }
+        p.restore();
+      }
+    }
+    else if (selected) {
       // Selection highlight
       p.save();
       QLinearGradient grad(selectionRect.topLeft(), selectionRect.topRight());
@@ -204,7 +225,7 @@ void FancyTabBar::paintEvent(QPaintEvent *pe) {
     }
 
     // Mouse hover effect
-    if (!selected && index == mouseHoverTabIndex && isTabEnabled(index)) {
+    if (!claude_theme && !selected && index == mouseHoverTabIndex && isTabEnabled(index)) {
       p.save();
       QLinearGradient grad(selectionRect.topLeft(),  selectionRect.topRight());
       grad.setColorAt(0, Qt::transparent);
@@ -251,19 +272,29 @@ void FancyTabBar::paintEvent(QPaintEvent *pe) {
 
       p.setTransform(m);
 
-      QFont boldFont(p.font());
-      boldFont.setBold(true);
-      p.setFont(boldFont);
+      if (claude_theme) {
+        QFont font(p.font());
+        font.setWeight(selected ? QFont::DemiBold : QFont::Normal);
+        p.setFont(font);
+        p.translate(0, 2);
+        p.setPen(selected ? ClaudeTheme::colors().text : ClaudeTheme::colors().text_secondary);
+        p.drawText(tabrectText, textFlags, TabText(index));
+      }
+      else {
+        QFont boldFont(p.font());
+        boldFont.setBold(true);
+        p.setFont(boldFont);
 
-      // Text drop shadow color
-      p.setPen(selected ? QColor(255, 255, 255, 160) : QColor(0, 0, 0, 110));
-      p.translate(0, 3);
-      p.drawText(tabrectText, textFlags, TabText(index));
+        // Text drop shadow color
+        p.setPen(selected ? QColor(255, 255, 255, 160) : QColor(0, 0, 0, 110));
+        p.translate(0, 3);
+        p.drawText(tabrectText, textFlags, TabText(index));
 
-      // Text foreground color
-      p.translate(0, -1);
-      p.setPen(selected ? QColor(60, 60, 60) : StyleHelper::panelTextColor());
-      p.drawText(tabrectText, textFlags, TabText(index));
+        // Text foreground color
+        p.translate(0, -1);
+        p.setPen(selected ? QColor(60, 60, 60) : StyleHelper::panelTextColor());
+        p.drawText(tabrectText, textFlags, TabText(index));
+      }
 
 
       // Draw the icon

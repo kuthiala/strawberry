@@ -23,6 +23,30 @@
       <item>
        <layout class="QHBoxLayout" name="layout_style">
         <item>
+         <widget class="QLabel" name="label_theme">
+          <property name="text">
+           <string>Theme</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="combobox_theme">
+          <property name="toolTip">
+           <string>The Claude theme has warm colours, rounded controls and a flat sidebar, it follows the system light or dark mode. Classic uses the style and colours below.</string>
+          </property>
+          <item>
+           <property name="text">
+            <string>Claude</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Classic</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
          <widget class="QLabel" name="label_style">
           <property name="text">
            <string>Style</string>
@@ -679,6 +703,7 @@
   </layout>
  </widget>
  <tabstops>
+  <tabstop>combobox_theme</tabstop>
   <tabstop>combobox_style</tabstop>
   <tabstop>checkbox_dark_mode</tabstop>
   <tabstop>checkbox_system_icons</tabstop>
