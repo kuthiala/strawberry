@@ -32,6 +32,7 @@
 #include <QPainter>
 #include <QPalette>
 #include <QColor>
+#include <QEvent>
 
 #include "analyzerbase.h"
 #include "fht.h"
@@ -108,6 +109,19 @@ void BlockAnalyzer::resizeEvent(QResizeEvent *e) {
   }
 
   drawBackground();
+
+}
+
+void BlockAnalyzer::changeEvent(QEvent *e) {
+
+  AnalyzerBase::changeEvent(e);
+
+  // The bars and the background are cached in pixmaps, redraw them when the palette changes, for example when switching between light and dark mode.
+  if (e->type() == QEvent::PaletteChange && !background_.isNull() && rows_ > 0) {
+    paletteChange(palette());
+    canvas_.fill(Qt::transparent);
+    update();
+  }
 
 }
 
