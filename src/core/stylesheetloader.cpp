@@ -36,6 +36,7 @@
 #include <QPalette>
 #include <QColor>
 #include <QEvent>
+#include <QList>
 
 #include "includes/shared_ptr.h"
 #include "logging.h"
@@ -62,7 +63,7 @@ constexpr bool kUseTextColorForAlternateBase = false;
 
 using std::make_shared;
 
-StyleSheetLoader::StyleSheetLoader(QObject *parent) : QObject(parent) {}
+StyleSheetLoader::StyleSheetLoader(QObject *parent) : QObject(parent), updating_(false) {}
 
 void StyleSheetLoader::SetStyleSheet(QWidget *widget, const QString &filename) {
 
@@ -118,32 +119,48 @@ void StyleSheetLoader::UpdateStyleSheet(QWidget *widget, SharedPtr<StyleSheetDat
   const int altbase_alpha_percent = static_cast<int>(std::lround(altbase_alpha * 100.0F));
   stylesheet.replace("%palette-alternate-base"_L1, QStringLiteral("rgba(%1,%2,%3,%4%)").arg(color_altbase.red()).arg(color_altbase.green()).arg(color_altbase.blue()).arg(altbase_alpha_percent));
 
-  ReplaceColor(&stylesheet, u"Window"_s, palette, QPalette::Window);
-  ReplaceColor(&stylesheet, u"Background"_s, palette, QPalette::Window);
-  ReplaceColor(&stylesheet, u"WindowText"_s, palette, QPalette::WindowText);
-  ReplaceColor(&stylesheet, u"Base"_s, palette, QPalette::Base);
-  ReplaceColor(&stylesheet, u"AlternateBase"_s, palette, QPalette::AlternateBase);
-  ReplaceColor(&stylesheet, u"ToolTipBase"_s, palette, QPalette::ToolTipBase);
-  ReplaceColor(&stylesheet, u"ToolTipText"_s, palette, QPalette::ToolTipText);
-  ReplaceColor(&stylesheet, u"Text"_s, palette, QPalette::Text);
-  ReplaceColor(&stylesheet, u"Button"_s, palette, QPalette::Button);
-  ReplaceColor(&stylesheet, u"ButtonText"_s, palette, QPalette::ButtonText);
-  ReplaceColor(&stylesheet, u"BrightText"_s, palette, QPalette::BrightText);
-  ReplaceColor(&stylesheet, u"Light"_s, palette, QPalette::Light);
-  ReplaceColor(&stylesheet, u"Midlight"_s, palette, QPalette::Midlight);
-  ReplaceColor(&stylesheet, u"Dark"_s, palette, QPalette::Dark);
-  ReplaceColor(&stylesheet, u"Mid"_s, palette, QPalette::Mid);
-  ReplaceColor(&stylesheet, u"Shadow"_s, palette, QPalette::Shadow);
-  ReplaceColor(&stylesheet, u"Highlight"_s, palette, QPalette::Highlight);
-  ReplaceColor(&stylesheet, u"HighlightedText"_s, palette, QPalette::HighlightedText);
-  ReplaceColor(&stylesheet, u"Link"_s, palette, QPalette::Link);
-  ReplaceColor(&stylesheet, u"LinkVisited"_s, palette, QPalette::LinkVisited);
+  // Longer names first, a name which is the start of another name would otherwise replace the start of it, "%palette-Highlight" turning "%palette-HighlightedText" into "#314f78edText".
+  static const QList<std::pair<QString, QPalette::ColorRole>> color_roles = []() {
+    QList<std::pair<QString, QPalette::ColorRole>> roles = {
+      { u"Window"_s, QPalette::Window },
+      { u"Background"_s, QPalette::Window },
+      { u"WindowText"_s, QPalette::WindowText },
+      { u"Base"_s, QPalette::Base },
+      { u"AlternateBase"_s, QPalette::AlternateBase },
+      { u"ToolTipBase"_s, QPalette::ToolTipBase },
+      { u"ToolTipText"_s, QPalette::ToolTipText },
+      { u"Text"_s, QPalette::Text },
+      { u"Button"_s, QPalette::Button },
+      { u"ButtonText"_s, QPalette::ButtonText },
+      { u"BrightText"_s, QPalette::BrightText },
+      { u"Light"_s, QPalette::Light },
+      { u"Midlight"_s, QPalette::Midlight },
+      { u"Dark"_s, QPalette::Dark },
+      { u"Mid"_s, QPalette::Mid },
+      { u"Shadow"_s, QPalette::Shadow },
+      { u"Highlight"_s, QPalette::Highlight },
+      { u"HighlightedText"_s, QPalette::HighlightedText },
+      { u"Link"_s, QPalette::Link },
+      { u"LinkVisited"_s, QPalette::LinkVisited },
+    };
+    std::stable_sort(roles.begin(), roles.end(), [](const std::pair<QString, QPalette::ColorRole> &a, const std::pair<QString, QPalette::ColorRole> &b) { return a.first.length() > b.first.length(); });
+    return roles;
+  }();
+  for (const std::pair<QString, QPalette::ColorRole> &color_role : color_roles) {
+    ReplaceColor(&stylesheet, color_role.first, palette, color_role.second);
+  }
 
 #ifdef Q_OS_MACOS
   stylesheet.replace(QLatin1String("macos"), QLatin1String("*"));
 #endif
 
+  // With an application stylesheet (the Claude theme), setting this stylesheet repolishes the widgets, which sets their palettes and sends PaletteChange again.
+  // Applying the same stylesheet again would repeat that forever, so only apply it when the colours changed.
+  if (widget->styleSheet() == stylesheet) return;
+
+  updating_ = true;
   widget->setStyleSheet(stylesheet);
+  updating_ = false;
 
 }
 
@@ -157,7 +174,7 @@ void StyleSheetLoader::ReplaceColor(QString *css, const QString &name, const QPa
 
 bool StyleSheetLoader::eventFilter(QObject *obj, QEvent *event) {
 
-  if (event->type() == QEvent::PaletteChange) {
+  if (event->type() == QEvent::PaletteChange && !updating_) {
     QWidget *widget = qobject_cast<QWidget*>(obj);
     if (widget && styledata_.contains(widget)) {
       UpdateStyleSheet(widget, styledata_[widget]);

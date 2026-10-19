@@ -61,6 +61,8 @@ class StyleSheetLoader : public QObject {
 
  private:
   QHash<QWidget*, SharedPtr<StyleSheetData>> styledata_;
+  // Set while a stylesheet is being applied, applying one changes the palette of the widget and its children, which must not apply it again.
+  bool updating_;
 };
 
 #endif  // STYLESHEETLOADER_H
