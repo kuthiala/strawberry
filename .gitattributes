@@ -1,0 +1,5 @@
+# Bash scripts must keep LF line endings even when checked out with Git for Windows, or MSYS2's bash fails on the CRs.
+*.sh text eol=lf
+# cmd.exe needs CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf

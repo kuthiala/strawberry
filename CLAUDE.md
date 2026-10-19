@@ -79,4 +79,4 @@ Suffix conventions: `*_win.cpp`, `*-x11.cpp`, `*-macos.mm`/`.mm` (Objective-C++)
 
 ## This fork
 
-This is a fork (`kuthiala/strawberry`) with iPod sync hardening, a queued "Copy to device" pipeline, a Claude theme and macOS tooling on top of upstream. **Read [`.ai/README.md`](.ai/README.md) first**: it routes to the right reference file and lists the landmines (macOS bundling, the patched libgpod, iPod-sync rules) that past sessions lost hours on. Build on macOS with `./install-macos.sh build && ./install-macos.sh install -y`.
+This is a fork (`kuthiala/strawberry`) with iPod sync hardening, a queued "Copy to device" pipeline, a Claude theme and macOS tooling on top of upstream. **Read [`.ai/README.md`](.ai/README.md) first**: it routes to the right reference file and lists the landmines (macOS bundling, the patched libgpod, iPod-sync rules) that past sessions lost hours on. Build on macOS with `./install-macos.sh build && ./install-macos.sh install -y`; on Windows with `install-windows.cmd` (MSYS2 UCRT64, see `.ai/15-windows.md`).

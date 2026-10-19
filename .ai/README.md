@@ -4,6 +4,7 @@ Start here. Read only the file(s) the task needs: the table below routes you, th
 
 **Fork:** `origin` = `kuthiala/strawberry`, `upstream` = `strawberrymusicplayer/strawberry`. The fork is upstream `master` plus a linear stack of fork commits (iPod sync hardening, sync queue, Claude theme, macOS tooling, these docs); see [`14-fork-maintenance.md`](./14-fork-maintenance.md).
 **Platform this fork is developed on:** macOS (Intel, x86_64), built with `./install-macos.sh` against the upstream deps tarball in `/opt/strawberry_macos_<arch>_release`.
+Windows builds (with iPod sync, unlike upstream's) use `install-windows.cmd` / `./install-windows.sh` in MSYS2 UCRT64, see [`15-windows.md`](./15-windows.md).
 
 ## Where to look
 
@@ -22,6 +23,7 @@ Start here. Read only the file(s) the task needs: the table below routes you, th
 | **Copy-to-device queue, sync pane, cancelling** | [`12-sync-queue.md`](./12-sync-queue.md) |
 | **Colours, stylesheet, sidebar look, Appearance settings** | [`13-claude-theme.md`](./13-claude-theme.md) |
 | **Pulling upstream, rebasing, commit layout** | [`14-fork-maintenance.md`](./14-fork-maintenance.md) |
+| **Windows build, `WindowsDeviceLister`, iPod on Windows** | [`15-windows.md`](./15-windows.md) |
 | iPod diagnostics without Strawberry | [`tools/`](./tools/) |
 
 `CLAUDE.md` in the repo root is upstream's generic guide; this directory is the fork-specific layer on top.
@@ -43,7 +45,8 @@ Start here. Read only the file(s) the task needs: the table below routes you, th
 6. **Never start an `Organize` directly** — enqueue an `OrganizeQueue::JobRequest`. Two Organizes on one iPod deadlock one thread on `db_busy_`, and eject-after unmounts the device under the other. [`12`](./12-sync-queue.md)
 7. **Theme:** no `QSlider` rules and no plain-`QWidget` backgrounds in `claude.css`, no SVGs in stylesheets (no SVG plugin in the macOS deps), `%palette-` roles must be replaced longest-first. [`13 §13.3`](./13-claude-theme.md#133-donts-each-breaks-something)
 8. **Crash triage:** newest Strawberry crash log `ls -t ~/Library/Logs/Strawberry/strawberry-crash-*.log | head -1` (short), macOS report `~/Library/Logs/DiagnosticReports/strawberry-*.ips` (authoritative, look at `ktriageinfo`). [`11 §11.16`](./11-macos-dev-loop.md#1116-crash-logs)
-9. **Upstream may already have fixed your bug** — when rebasing, upstream independently fixed iPod Bugs #5 and #14; their versions were kept. Check `git log upstream/master -- <file>` before re-applying a fork fix. [`14`](./14-fork-maintenance.md)
+9. **Windows iPod IDs carry the FirewireGuid**: `WindowsDeviceLister` IDs are `Win/<USB serial>` because `GPodDevice::EnsureIpodSysInfo` reads the GUID from the unique ID, and iPods are mounted at `E:` without a trailing slash because `Song::InitFromItdb` appends `/iPod_Control/...`. Changing either breaks iPod Classic syncs. [`15 §15.2`](./15-windows.md#152-pieces-that-exist-only-for-windows)
+10. **Upstream may already have fixed your bug** — when rebasing, upstream independently fixed iPod Bugs #5 and #14; their versions were kept. Check `git log upstream/master -- <file>` before re-applying a fork fix. [`14`](./14-fork-maintenance.md)
 
 ## Keep this directory current
 

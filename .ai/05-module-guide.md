@@ -381,6 +381,7 @@ Removable USB drives, MTP devices (Android, etc.), and iPod Classic.
 | `udisks2lister.{h,cpp}`                        | Linux UDisks2 (via D-Bus).                            |
 | `giolister.{h,cpp}`                            | GIO backend.                                          |
 | `macosdevicelister.{h,mm}`                     | macOS DiskArbitration.                                |
+| `windowsdevicelister.{h,cpp}`                  | Windows drive letters, polled (fork; see `.ai/15-windows.md`). |
 | `cddalister.{h,cpp}` / `cddadevice.{h,cpp}` / `cddasongloader.{h,cpp}` | Audio CD (libcdio).            |
 | `connecteddevice.{h,cpp}` / `filesystemdevice.{h,cpp}` | Connected device state / generic filesystem.   |
 | `mtpdevice.{h,cpp}` / `mtploader.{h,cpp}` / `mtpconnection.{h,cpp}` | MTP (libmtp).                     |

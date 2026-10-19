@@ -11,10 +11,13 @@ The stack, oldest first (as of the 2026-10 sync onto upstream 1.2.31):
 | Area | Commits |
 |------|---------|
 | macOS tooling | `install-macos.sh` helper; later "Build with upstream's macdeploytool deploy target" |
+| Windows | `WindowsDeviceLister`, CrashReporter guards, `install-windows.{sh,cmd}`, `docs/INSTALL-Windows.md` (see [`15`](./15-windows.md)) |
 | Docs | `docs/iPod-copy-flow.md`, `.ai/` reference, `docs/INSTALL-macOS.md`, the bug diary, the reorganised `.ai/` + `.ai/tools` scripts |
 | iPod sync | `Song::ToItdb` filetype string; Transcoder encoder tiebreak; SysInfo seeding; full error paths + cover-trace; per-song unit of work; exponential-backoff retries; CrashReporter; throttled CommitCopy + memory pressure relief + cover fingerprints; transcoder output reservations (Bug #13); iPod playlist management; podcasts + audiobooks |
 | Sync UI | Device sync progress pane; OrganizeQueue (queued jobs, cancel, multi-job pane) |
 | Look | StyleSheetLoader fixes; BlockAnalyzer palette fix; Claude theme |
+
+The patched libgpod is a separate repository, `kuthiala/strawberry-libgpod` (fork of `strawberrymusicplayer/strawberry-libgpod`), checked out at `.idea/strawberry-libgpod` for macOS and cloned by `install-windows.sh` on Windows. Push its commits before relying on them in the Windows build.
 
 ## 14.2 Syncing with upstream
 
