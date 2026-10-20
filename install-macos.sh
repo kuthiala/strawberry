@@ -20,7 +20,9 @@
 #
 # Commands (run with --help for full details):
 #   deps         Download + extract the strawberry-macos-dependencies tarball
-#                into /opt (and install minimal brew build tools)
+#                into /opt, install minimal brew build tools, then build the
+#                fork's patched libgpod into /opt (replacing the stock one)
+#   libgpod      (Re)build only the patched libgpod
 #   configure    Run cmake configure step only
 #   build        Configure (if needed) + compile
 #   bundle       Run `make deploy` (macdeploytool: Qt + GStreamer + dylibs)
@@ -40,7 +42,9 @@
 #   --build-type TYPE   CMake build type (default: Release)
 #   --jobs N            Parallel jobs (default: number of CPUs)
 #   --no-bundle         Skip the macdeploytool bundling step (faster dev loop)
-#   --refresh-deps      Re-download the deps tarball even if cached
+#   --refresh-deps      Re-download the deps tarball and re-pull libgpod
+#   --libgpod-src DIR   libgpod checkout to build (default: .idea/strawberry-libgpod
+#                       if present, else a clone of LIBGPOD_REPO in the cache)
 #   --yes, -y           Don't prompt before destructive actions
 #   --verbose, -v       Verbose output (set -x)
 #
@@ -71,6 +75,12 @@ DEPS_TARBALL_URL=""
 # Local cache for downloaded artefacts (tarball, etc.)
 readonly INSTALL_CACHE_DIR="${HOME}/Library/Caches/strawberry-install"
 
+# The fork's patched libgpod (.ai/11-macos-dev-loop.md §11.7). The deps
+# tarball ships the stock build, which lacks the iPod sync fixes.
+readonly LIBGPOD_REPO="${LIBGPOD_REPO:-https://github.com/kuthiala/strawberry-libgpod.git}"
+readonly LIBGPOD_REF="${LIBGPOD_REF:-master}"
+readonly LIBGPOD_DEV_CHECKOUT="${REPO_ROOT}/.idea/strawberry-libgpod"
+
 # Minimal Homebrew packages we still need (build tools — NOT runtime libs).
 # Everything else comes from the upstream deps tarball.
 readonly BREW_PKGS_BUILDTOOLS=(
@@ -85,6 +95,8 @@ BUILD_TYPE="Release"
 JOBS="$(/usr/sbin/sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 DO_BUNDLE=1
 REFRESH_DEPS=0
+LIBGPOD_SRC=""
+FORCE_LIBGPOD=0
 ASSUME_YES=0
 VERBOSE=0
 
@@ -133,6 +145,11 @@ confirm() {
 }
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# True when the binary $1 contains the string $2. grep -c reads to the end:
+# grep -q would quit at the first match, strings would die of SIGPIPE and
+# pipefail would turn the match into a failure.
+binary_has_string() { strings "$1" 2>/dev/null | grep -c -- "$2" >/dev/null; }
 
 require_macos() {
   if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -213,7 +230,19 @@ ensure_brew() {
 
 brew_installed() { brew ls --versions "$1" >/dev/null 2>&1; }
 
+# The compiler, git and the SDK come from the Command Line Tools.
+ensure_xcode_clt() {
+  if xcode-select -p >/dev/null 2>&1 && have_cmd clang && have_cmd git; then
+    ok "Xcode Command Line Tools found at $(xcode-select -p)"
+    return 0
+  fi
+  info "Xcode Command Line Tools not found — opening the installer"
+  xcode-select --install 2>/dev/null || true
+  fatal "Finish the Command Line Tools install in the dialog, then run ./${SCRIPT_NAME} again."
+}
+
 ensure_build_tools() {
+  ensure_xcode_clt
   ensure_brew
   local -a missing=()
   local pkg
@@ -246,6 +275,7 @@ deps_installed() {
 ensure_strawberry_macos_deps() {
   if deps_installed && (( ! REFRESH_DEPS )); then
     ok "Strawberry macOS dependencies already at ${DEPS_PREFIX}"
+    ensure_patched_libgpod
     return 0
   fi
 
@@ -283,6 +313,121 @@ ensure_strawberry_macos_deps() {
   deps_installed \
     || fatal "Extraction did not produce ${DEPS_PREFIX} or it lacks macdeploytool."
   ok "Strawberry macOS dependencies installed at ${DEPS_PREFIX}"
+  # The tarball just replaced libgpod with the stock build (landmine 2).
+  ensure_patched_libgpod
+}
+
+# ------------------------------------------------------------------------------
+# The fork's patched libgpod, built against the deps in /opt and copied over
+# ${DEPS_PREFIX}/lib/libgpod.dylib, where the deploy step and the bundle audit
+# pick it up (Bug #12: the audit compares the bundle with /opt, not with the
+# libgpod build tree). A stamp file holds the commit it was built from;
+# extracting a tarball deletes the whole prefix and with it the stamp, so a
+# refreshed tarball always gets a fresh patched build.
+# ------------------------------------------------------------------------------
+libgpod_src_dir() {
+  if [[ -n "${LIBGPOD_SRC}" ]]; then
+    echo "${LIBGPOD_SRC}"
+  elif [[ -f "${LIBGPOD_DEV_CHECKOUT}/CMakeLists.txt" ]]; then
+    echo "${LIBGPOD_DEV_CHECKOUT}"
+  else
+    echo "${INSTALL_CACHE_DIR}/strawberry-libgpod"
+  fi
+}
+
+libgpod_stamp() { echo "${DEPS_PREFIX}/lib/libgpod.strawberry-fork.commit"; }
+
+libgpod_source_commit() {
+  local src="$1"
+  if git -C "${src}" rev-parse HEAD >/dev/null 2>&1; then
+    local commit
+    commit="$(git -C "${src}" rev-parse HEAD)"
+    if [[ -n "$(git -C "${src}" status --porcelain --untracked-files=no 2>/dev/null)" ]]; then
+      commit="${commit}-dirty-$(git -C "${src}" diff | shasum -a 256 | cut -c1-12)"
+    fi
+    echo "${commit}"
+  else
+    echo "unknown"
+  fi
+}
+
+# Clones or updates only the cache checkout; a developer checkout (under
+# .idea/ or --libgpod-src) is built as it is.
+fetch_libgpod() {
+  local src
+  src="$(libgpod_src_dir)"
+  if [[ "${src}" != "${INSTALL_CACHE_DIR}/strawberry-libgpod" ]]; then
+    [[ -f "${src}/CMakeLists.txt" ]] || fatal "libgpod checkout ${src} has no CMakeLists.txt"
+    ok "Using local libgpod checkout ${src}"
+    return 0
+  fi
+  if [[ ! -d "${src}/.git" ]]; then
+    info "Cloning ${LIBGPOD_REPO} (${LIBGPOD_REF})"
+    mkdir -p "${INSTALL_CACHE_DIR}"
+    git clone --quiet "${LIBGPOD_REPO}" "${src}"
+  else
+    git -C "${src}" fetch --quiet origin \
+      || warn "Could not fetch ${LIBGPOD_REPO}; building the checkout as it is"
+  fi
+  git -C "${src}" checkout --quiet "${LIBGPOD_REF}"
+  if git -C "${src}" symbolic-ref -q HEAD >/dev/null; then
+    git -C "${src}" merge --quiet --ff-only "origin/${LIBGPOD_REF}" 2>/dev/null || true
+  fi
+  ok "libgpod source at $(git -C "${src}" log --oneline -1)"
+}
+
+ensure_patched_libgpod() {
+  fetch_libgpod
+  local src commit
+  src="$(libgpod_src_dir)"
+  commit="$(libgpod_source_commit "${src}")"
+  if (( ! FORCE_LIBGPOD )) && [[ -f "$(libgpod_stamp)" ]] && [[ "$(cat "$(libgpod_stamp)")" == "${commit}" ]] \
+     && binary_has_string "${DEPS_PREFIX}/lib/libgpod.dylib" g_try_realloc; then
+    ok "Patched libgpod (${commit:0:12}) already in ${DEPS_PREFIX}/lib"
+    return 0
+  fi
+  build_patched_libgpod "${src}" "${commit}"
+}
+
+build_patched_libgpod() {
+  local src="$1" commit="$2"
+  local build="${INSTALL_CACHE_DIR}/build-libgpod-${ARCH}"
+  local dest="${DEPS_PREFIX}/lib/libgpod.dylib"
+  info "Building patched libgpod from ${src}"
+  rm -rf "${build}"
+  # CMAKE_POLICY_VERSION_MINIMUM: the tarball ships CMake 4, which refuses
+  # libgpod's old cmake_minimum_required.
+  PATH="${DEPS_PREFIX}/bin:${PATH}" \
+  PKG_CONFIG_LIBDIR="${DEPS_PREFIX}/lib/pkgconfig" \
+  PKG_CONFIG_PATH="${DEPS_PREFIX}/lib/pkgconfig" \
+    cmake -S "${src}" -B "${build}" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+      -DCMAKE_OSX_ARCHITECTURES="${ARCH}" \
+      -DCMAKE_INSTALL_PREFIX="${DEPS_PREFIX}" \
+      -DCMAKE_PREFIX_PATH="${DEPS_PREFIX}/lib/cmake"
+  grep -q '^#define HAVE_GDKPIXBUF' "${build}/config.h" \
+    || fatal "libgpod configured without gdk-pixbuf: iPod cover art would be silently dropped."
+  PATH="${DEPS_PREFIX}/bin:${PATH}" cmake --build "${build}" --parallel "${JOBS}"
+
+  local built="${build}/libgpod.dylib"
+  [[ -f "${built}" ]] || fatal "libgpod build did not produce ${built}"
+  # Bug #11 fix marker (checked g_try_realloc): proves this is the fork's libgpod.
+  binary_has_string "${built}" g_try_realloc \
+    || fatal "${built} lacks the fork's patches (no g_try_realloc). Is ${src} the patched fork?"
+
+  local SUDO=""
+  [[ -w "${DEPS_PREFIX}/lib" ]] || SUDO="sudo"
+  mkdir -p "${INSTALL_CACHE_DIR}"
+  if [[ -f "${dest}" ]] && ! binary_has_string "${dest}" g_try_realloc; then
+    cp "${dest}" "${INSTALL_CACHE_DIR}/libgpod-stock-from-deps.dylib"
+  fi
+  ${SUDO} cp "${built}" "${dest}"
+  ${SUDO} install_name_tool -id "@rpath/libgpod.dylib" "${dest}" 2>/dev/null || true
+  ${SUDO} codesign --force --sign - "${dest}" >/dev/null 2>&1 || true
+  echo "${commit}" | ${SUDO} tee "$(libgpod_stamp)" >/dev/null
+  cp "${built}" "${INSTALL_CACHE_DIR}/libgpod-patched-backup.dylib"
+  ok "Patched libgpod installed: ${dest}"
 }
 
 # ------------------------------------------------------------------------------
@@ -293,6 +438,13 @@ cmd_deps() {
   ensure_build_tools
   ensure_strawberry_macos_deps
   ok "All dependencies are present"
+}
+
+cmd_libgpod() {
+  step "Building the patched libgpod"
+  ensure_build_tools
+  FORCE_LIBGPOD=1
+  ensure_strawberry_macos_deps
 }
 
 # Build the CMake configure arguments. Mirrors the official CI configure
@@ -934,6 +1086,12 @@ cmd_doctor() {
 
   if deps_installed; then
     ok "Strawberry macOS deps: ready at ${DEPS_PREFIX}"
+    if binary_has_string "${DEPS_PREFIX}/lib/libgpod.dylib" g_try_realloc; then
+      ok "libgpod in ${DEPS_PREFIX}/lib is the patched fork ($(cut -c1-12 "$(libgpod_stamp)" 2>/dev/null || echo 'no stamp'))"
+    else
+      error "libgpod in ${DEPS_PREFIX}/lib is the stock build (run './${SCRIPT_NAME} libgpod')"
+      issues=$((issues + 1))
+    fi
   else
     warn "Strawberry macOS deps not yet downloaded (run './${SCRIPT_NAME} deps')"
   fi
@@ -960,7 +1118,7 @@ cmd_all() {
 }
 
 cmd_help() {
-  sed -n '2,55p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ------------------------------------------------------------------------------
@@ -970,7 +1128,7 @@ parse_args() {
   COMMAND=""
   while (( $# > 0 )); do
     case "$1" in
-      deps|configure|build|bundle|install|uninstall|purge|clean|status|doctor|all|help)
+      deps|libgpod|configure|build|bundle|install|uninstall|purge|clean|status|doctor|all|help)
         if [[ -z "${COMMAND}" ]]; then
           COMMAND="$1"
         else
@@ -988,6 +1146,8 @@ parse_args() {
       --jobs=*)       JOBS="${1#*=}";       shift   ;;
       --no-bundle)    DO_BUNDLE=0;          shift   ;;
       --refresh-deps) REFRESH_DEPS=1;       shift   ;;
+      --libgpod-src)  LIBGPOD_SRC="$2";     shift 2 ;;
+      --libgpod-src=*) LIBGPOD_SRC="${1#*=}"; shift ;;
       --yes|-y)       ASSUME_YES=1;         shift   ;;
       --verbose|-v)   VERBOSE=1;            shift   ;;
       -h|--help)      COMMAND="help";       shift   ;;
@@ -1010,6 +1170,7 @@ main() {
   parse_args "$@"
   case "${COMMAND}" in
     deps)      cmd_deps ;;
+    libgpod)   cmd_libgpod ;;
     configure) cmd_configure ;;
     build)     cmd_build ;;
     bundle)    cmd_bundle ;;

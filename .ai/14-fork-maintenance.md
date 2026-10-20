@@ -17,7 +17,7 @@ The stack, oldest first (as of the 2026-10 sync onto upstream 1.2.31):
 | Sync UI | Device sync progress pane; OrganizeQueue (queued jobs, cancel, multi-job pane) |
 | Look | StyleSheetLoader fixes; BlockAnalyzer palette fix; Claude theme |
 
-The patched libgpod is a separate repository, `kuthiala/strawberry-libgpod` (fork of `strawberrymusicplayer/strawberry-libgpod`), checked out at `.idea/strawberry-libgpod` for macOS and cloned by `install-windows.sh` on Windows. Push its commits before relying on them in the Windows build.
+The patched libgpod is a separate repository, `kuthiala/strawberry-libgpod` (fork of `strawberrymusicplayer/strawberry-libgpod`), checked out at `.idea/strawberry-libgpod` for development. Both install scripts build that checkout when it exists and otherwise clone the GitHub repository, so push its commits before relying on them on a machine without the checkout.
 
 ## 14.2 Syncing with upstream
 

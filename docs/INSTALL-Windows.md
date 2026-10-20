@@ -11,10 +11,11 @@ From cmd or PowerShell, in the repository folder:
 install-windows.cmd
 ```
 
-This installs [MSYS2](https://www.msys2.org/) with winget if it isn't there, then runs the whole build: the first run downloads about 1.5 GB of packages and compiles for 15 to 30 minutes.
+That's the only step: it installs [MSYS2](https://www.msys2.org/) if it isn't there (with winget, or by downloading the official installer), updates it, installs every package, builds getopt-win and the patched libgpod, builds Strawberry, bundles it and installs it.
+The first run downloads about 1.5 GB and compiles for 15 to 30 minutes; later runs only rebuild what changed.
 When it finishes, start **Strawberry** from the Start Menu.
 
-Already in an MSYS2 **UCRT64** shell? Run the script directly:
+Already in an MSYS2 **UCRT64** shell? Run the script directly (it doesn't update MSYS2 itself, run `pacman -Syu` first if it's been a while):
 
 ```bash
 ./install-windows.sh            # same as: deps, build, install
@@ -36,7 +37,7 @@ Already in an MSYS2 **UCRT64** shell? Run the script directly:
 | `status`, `doctor` | Show what's installed / check the environment |
 | `all` | `deps`, `build`, `install` (the default) |
 
-Options: `--prefix DIR` (install folder, default `%LOCALAPPDATA%\Programs\Strawberry`), `--build-dir DIR`, `--build-type Debug` (also shows a console window), `--jobs N`, `--refresh-deps` (pull and rebuild libgpod; with `install-windows.cmd` it also updates MSYS2 itself), `--libgpod-src DIR` (use your own libgpod checkout), `--desktop-shortcut`, `-y`, `-v`.
+Options: `--prefix DIR` (install folder, default `%LOCALAPPDATA%\Programs\Strawberry`), `--build-dir DIR`, `--build-type Debug` (also shows a console window), `--jobs N`, `--refresh-deps` (rebuild libgpod and getopt-win even if up to date), `--libgpod-src DIR` (use your own libgpod checkout), `--desktop-shortcut`, `-y`, `-v`.
 
 After changing code, `./install-windows.sh build && ./install-windows.sh install -y` rebuilds incrementally and reinstalls.
 
@@ -63,7 +64,7 @@ The installed app doesn't need MSYS2 to run: you can copy `%LOCALAPPDATA%\Progra
 
 ## Troubleshooting
 
-- **pacman reports 404 errors**: the package database is old. Run `install-windows.cmd --refresh-deps`.
+- **pacman reports 404 errors**: the package database is old. Run `install-windows.cmd`, which updates MSYS2 first.
 - **"Run this from an MSYS2 UCRT64 shell"**: you opened the MSYS or MINGW64 shell. Use the "MSYS2 UCRT64" shortcut, or `install-windows.cmd`.
 - **The iPod doesn't show up**: make sure it's in disk mode and has a drive letter in Explorer. Run a Debug build (`--build-type Debug`) and look for `Device added Win/...` in the console.
 - **The iPod shows "No Music" after a sync**: the device ID didn't contain the iPod's serial number, which the iTunesDB signature needs. The console shows `cannot derive FirewireGuid from unique_id`; please report it with that line.

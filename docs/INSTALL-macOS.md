@@ -37,6 +37,16 @@ Sparkle integration (auto-updater)    Stream tagreader
 Translations                          Waveform
 ```
 
+On top of that, the script replaces the tarball's stock libgpod with this
+fork's patched one (iPod sync fixes): it builds `.idea/strawberry-libgpod` if
+you have that checkout, otherwise it clones
+[`kuthiala/strawberry-libgpod`](https://github.com/kuthiala/strawberry-libgpod)
+into `~/Library/Caches/strawberry-install/`, and installs the result into
+`/opt/strawberry_macos_<arch>_release/lib/`. It rebuilds it whenever that
+source changes or the tarball is re-extracted; `./install-macos.sh libgpod`
+forces a rebuild. The only other prerequisite, the Xcode Command Line Tools,
+is detected and its installer opened if missing.
+
 The only thing the official build does that the script doesn't is sign with
 Apple's Developer ID. We use **ad-hoc codesigning** (identity `-`) instead,
 which satisfies macOS Sequoia's "every dylib must be signed" requirement

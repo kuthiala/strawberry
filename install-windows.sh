@@ -42,8 +42,9 @@
 #   --build-type TYPE    CMake build type (default: Release)
 #   --jobs N             Parallel jobs (default: number of CPUs)
 #   --no-bundle          install: copy the existing dist/ without re-bundling
-#   --refresh-deps       Re-pull and rebuild libgpod and getopt-win
-#   --libgpod-src DIR    Use a local libgpod checkout instead of cloning
+#   --refresh-deps       Rebuild libgpod and getopt-win even if up to date
+#   --libgpod-src DIR    libgpod checkout to build (default: .idea/strawberry-libgpod
+#                        if present, else a clone of LIBGPOD_REPO)
 #   --desktop-shortcut   Also put a shortcut on the desktop
 #   --yes, -y            Don't prompt before destructive actions
 #   --verbose, -v        Verbose output (set -x)
@@ -168,6 +169,11 @@ confirm() {
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# True when the binary $1 contains the string $2. grep -c reads to the end:
+# grep -q would quit at the first match, strings would die of SIGPIPE and
+# pipefail would turn the match into a failure.
+binary_has_string() { strings "$1" 2>/dev/null | grep -c -- "$2" >/dev/null; }
+
 # Windows path with forward slashes (C:/msys64/...), what native CMake and pkgconf expect.
 winpath() { cygpath -m "$1"; }
 
@@ -279,6 +285,8 @@ ensure_getopt_win() {
 libgpod_src_dir() {
   if [[ -n "${LIBGPOD_SRC}" ]]; then
     echo "${LIBGPOD_SRC}"
+  elif [[ -f "${REPO_ROOT}/.idea/strawberry-libgpod/CMakeLists.txt" ]]; then
+    echo "${REPO_ROOT}/.idea/strawberry-libgpod"
   else
     echo "${DEPS_ROOT}/src/strawberry-libgpod"
   fi
@@ -311,8 +319,9 @@ libgpod_source_commit() {
 fetch_libgpod() {
   local src
   src="$(libgpod_src_dir)"
-  if [[ -n "${LIBGPOD_SRC}" ]]; then
-    [[ -f "${src}/CMakeLists.txt" ]] || fatal "--libgpod-src ${src} has no CMakeLists.txt"
+  # A developer checkout (--libgpod-src or .idea/strawberry-libgpod) is built as it is.
+  if [[ "${src}" != "${DEPS_ROOT}/src/strawberry-libgpod" ]]; then
+    [[ -f "${src}/CMakeLists.txt" ]] || fatal "libgpod checkout ${src} has no CMakeLists.txt"
     ok "Using local libgpod checkout ${src}"
     return 0
   fi
@@ -320,9 +329,9 @@ fetch_libgpod() {
     info "Cloning ${LIBGPOD_REPO} (${LIBGPOD_REF})"
     mkdir -p "$(dirname "${src}")"
     git clone --quiet "${LIBGPOD_REPO}" "${src}"
-  elif (( REFRESH_DEPS )); then
-    info "Updating libgpod checkout"
-    git -C "${src}" fetch --quiet origin
+  else
+    git -C "${src}" fetch --quiet origin \
+      || warn "Could not fetch ${LIBGPOD_REPO}; building the checkout as it is"
   fi
   git -C "${src}" checkout --quiet "${LIBGPOD_REF}"
   if git -C "${src}" symbolic-ref -q HEAD >/dev/null; then
@@ -359,7 +368,7 @@ build_libgpod() {
   cmake --install "${build}"
   libgpod_installed || fatal "libgpod did not install into ${DEPS_PREFIX}"
   # Bug #11 fix marker (checked g_try_realloc): proves this is the fork's libgpod, not a stock one.
-  if ! strings "$(libgpod_dll)" | grep -q g_try_realloc; then
+  if ! binary_has_string "$(libgpod_dll)" g_try_realloc; then
     fatal "$(libgpod_dll) lacks the fork's patches (no g_try_realloc). Is LIBGPOD_REPO/--libgpod-src the patched fork?"
   fi
   echo "${commit}" > "$(libgpod_stamp)"
@@ -861,7 +870,7 @@ cmd_all() {
 }
 
 cmd_help() {
-  sed -n '2,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,53p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 # ------------------------------------------------------------------------------

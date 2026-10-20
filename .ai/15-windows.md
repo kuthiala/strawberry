@@ -33,7 +33,8 @@ The audit then fails the bundle if any shipped `.exe`/`.dll` needs a DLL that is
 `install` copies `dist/` to `%LOCALAPPDATA%\Programs\Strawberry` (no admin rights needed) after deleting the old copy, and makes a Start Menu shortcut.
 Settings live in `HKCU\Software\Strawberry`, the collection database and caches in `%LOCALAPPDATA%\Strawberry`; `uninstall` asks before removing them.
 
-`install-windows.cmd` is the entry point from cmd/PowerShell: installs MSYS2 with winget if missing, runs `pacman -Syuu` twice for `--refresh-deps` (from outside MSYS2, because a core update closes every MSYS2 process), then starts the script in UCRT64.
+`install-windows.cmd` is the one-step entry point from cmd/PowerShell: installs MSYS2 if missing (winget, else the official installer fetched with `curl.exe` and run unattended), runs `pacman -Syuu` twice on every run (from outside MSYS2, because a core update closes every MSYS2 process; it also stops a stale package database from causing 404s), then starts the script in UCRT64, whose default command does deps, build, bundle and install.
+libgpod comes from `.idea/strawberry-libgpod` when it exists, `--libgpod-src`, or a clone of `kuthiala/strawberry-libgpod` that is fetched on every run, and is rebuilt when its commit changes, the same rules as on macOS.
 
 ## 15.4 How this was verified, and what wasn't
 
